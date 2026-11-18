@@ -436,21 +436,40 @@ function Invoke-Apply {
         $changed = $false
 
         # 1) Deixar o Windows desligar a placa para poupar energia
+        $pm = $null
         try {
             $pm = Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction Stop
+        } catch {
+            Write-Info "Gestao de energia: nao suportada ou ilegivel nesta placa ($($_.Exception.Message.Trim()))"
+        }
+        if ($pm) {
             $current = [string]$pm.AllowComputerToTurnOffDevice
             if ($current -eq 'Enabled') {
                 $entry.PowerManagement = $current
                 if ($PSCmdlet.ShouldProcess($a.Name, 'Desligar "permitir que o computador desligue este dispositivo"')) {
-                    Set-NetAdapterPowerManagement -Name $a.Name -AllowComputerToTurnOffDevice Disabled -NoRestart -ErrorAction Stop
-                    $changed = $true
+                    try {
+                        Set-NetAdapterPowerManagement -Name $a.Name -AllowComputerToTurnOffDevice Disabled -NoRestart -ErrorAction Stop
+                        $changed = $true
+                    } catch {
+                        Write-Warn2 "Gestao de energia do Windows: falhou ao desligar: $($_.Exception.Message)"
+                    }
+
+                    # Confirmar lendo outra vez: so dizemos OK se ficou mesmo Disabled.
+                    $now = $null
+                    try {
+                        $now = [string](Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction Stop).AllowComputerToTurnOffDevice
+                    } catch {
+                        Write-Warn2 "Gestao de energia do Windows: nao consegui confirmar o valor: $($_.Exception.Message)"
+                    }
+                    if ($now -eq 'Disabled') {
+                        Write-Ok 'Gestao de energia do Windows desligada'
+                    } elseif ($now) {
+                        Write-Warn2 "Gestao de energia do Windows: continua '$now' (esperado 'Disabled')"
+                    }
                 }
-                Write-Ok 'Gestao de energia do Windows desligada'
             } else {
                 Write-Info "Gestao de energia do Windows: $current (nada a fazer)"
             }
-        } catch {
-            Write-Info 'Gestao de energia: nao suportada por esta placa'
         }
 
         # 2) RSC
