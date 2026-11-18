@@ -8,6 +8,9 @@
     em latencia/estabilidade e volta a medir para comparar. Antes de mudar qualquer coisa guarda
     um backup em JSON, para poderes desfazer tudo com -Mode Revert.
 
+    No plano de energia ativo do Windows:
+      - "Definicoes do adaptador sem fios > Modo de poupanca de energia" -> Desempenho maximo (corrente e bateria)
+
     O que o modo Apply muda, em cada placa de rede fisica (Wi-Fi e Ethernet, incluindo USB):
       - "Permitir que o computador desligue este dispositivo" -> desligado
       - Poupanca de energia da placa Wi-Fi (Power Saving) -> desligada
@@ -74,7 +77,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$Version   = '1.0.0'
+$Version   = '1.1.0'
 $Root      = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $BackupDir = Join-Path $Root 'backups'
 $LogDir    = Join-Path $Root 'logs'
@@ -89,23 +92,32 @@ $DnsPresets = @{
 # Regras para as propriedades avancadas das placas.
 # Display: regex contra o nome da propriedade (EN / PT / ES, porque o driver usa a lingua do Windows).
 # Want   : regex contra os valores validos; escolhe o primeiro que bater.
+# "Desligado" em EN / PT-BR / PT-PT / ES (Disabled, Desabilitado, Desativado, Desactivado, Deshabilitado...).
+$OffValues = 'Disab|Desab|Deshab|Desact|Desativ|Deslig|^Off$'
+
 $Rules = @(
     @{ Label = 'Poupanca de energia da placa'
        Display = '^(Power Saving|Power Save Mode|Power Saving Mode|Modo de economia de energia|Economia de energia|Poupança de energia|Modo de poupança de energia|Ahorro de energía|Modo de ahorro de energía)$'
-       Want = 'Disab|Desab|Deshab|^Off$|Deslig|Desativ' }
+       Want = $OffValues }
     @{ Label = 'Agressividade de roaming'
        Display = 'Roaming Aggressiveness|Agressividade de roaming|Agresividad de itinerancia|Agresividad de roaming'
-       Want = '^1\.|Lowest|Mais baix|Más baj|Disab|Desab|Deshab' }
+       Want = '^1\.|Lowest|Mais baix|Más baj|Disab|Desab|Deshab|Desact' }
     @{ Label = 'Energy-Efficient Ethernet'
-       Display = 'Energy.Efficient Ethernet|Advanced EEE|^EEE$|Green Ethernet|Ethernet verde|Ethernet.*efici|Gigabit Lite'
-       Want = 'Disab|Desab|Deshab|^Off$|Deslig|Desativ' }
+       Display = 'Energy.Efficient Ethernet|Advanced EEE|^EEE$|Green Ethernet|Ethernet verde|Ethernet.*efici'
+       Want = $OffValues }
     @{ Label = 'Suspensao seletiva USB'
        Display = 'Selective Suspend|Suspensão seletiva|Suspensión selectiva'
-       Want = 'Disab|Desab|Deshab|^Off$|Deslig|Desativ' }
+       Want = $OffValues }
 )
 
+# Plano de energia do Windows -> "Definicoes do adaptador sem fios" -> "Modo de poupanca de energia".
+# 0 = Desempenho maximo, 1 = Poupanca baixa, 2 = Poupanca media, 3 = Poupanca maxima.
+$WifiPowerSub   = '19cbb8fa-5279-450e-9fac-8a3d5fedd0c1'
+$WifiPowerSet   = '12bbebe6-58d6-4636-95bb-3217ef867c1a'
+$WifiPowerNames = @('Desempenho maximo', 'Poupanca baixa', 'Poupanca media', 'Poupanca maxima')
+
 # Placas que nunca tocamos (VPNs, virtuais, Bluetooth).
-$ExcludeAdapters = 'Bluetooth|Virtual|TAP|Tunnel|VPN|Wintun|WireGuard|Hyper-V|Loopback|Check Point|TunnelBear'
+$ExcludeAdapters = 'Bluetooth|Virtual|\bTAP\b|Tunnel|VPN|Wintun|WireGuard|Hyper-V|Loopback|Check Point|TunnelBear'
 
 # ---------------------------------------------------------------- utilitarios
 
@@ -161,25 +173,72 @@ function Wait-Network([int]$TimeoutSec = 40) {
     return $false
 }
 
+function Get-WifiPowerPlan {
+    # Le o "Modo de poupanca de energia" do Wi-Fi no plano ativo. Devolve $null se nao existir.
+    try {
+        $scheme = [regex]::Match((powercfg /getactivescheme | Out-String), '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}').Value
+        if (-not $scheme) { return $null }
+        # As duas ultimas linhas com 0x.. sao sempre AC e DC (independente da lingua do Windows).
+        $vals = @(powercfg /q $scheme $WifiPowerSub $WifiPowerSet 2>$null |
+            Where-Object { $_ -match ':\s*0x[0-9a-fA-F]+\s*$' } |
+            ForEach-Object { [Convert]::ToInt32([regex]::Match($_, '0x([0-9a-fA-F]+)').Groups[1].Value, 16) })
+        if ($vals.Count -lt 2) { return $null }
+        return [pscustomobject]@{ Scheme = $scheme; AC = $vals[-2]; DC = $vals[-1] }
+    } catch {
+        return $null
+    }
+}
+
+function Set-WifiPowerPlan([string]$Scheme, [int]$AC, [int]$DC) {
+    powercfg /setacvalueindex $Scheme $WifiPowerSub $WifiPowerSet $AC | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "powercfg falhou (AC, codigo $LASTEXITCODE)" }
+    powercfg /setdcvalueindex $Scheme $WifiPowerSub $WifiPowerSet $DC | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "powercfg falhou (DC, codigo $LASTEXITCODE)" }
+    powercfg /setactive $Scheme | Out-Null
+}
+
+function Format-WifiPower([int]$Value) {
+    if ($Value -ge 0 -and $Value -lt $WifiPowerNames.Count) { return "$Value ($($WifiPowerNames[$Value]))" }
+    return [string]$Value
+}
+
 # ---------------------------------------------------------------- testes
 
 function Measure-Target([string]$Label, [string]$HostName, [int]$Pings) {
+    $empty = [pscustomobject]@{ Alvo = $Label; Host = $HostName; Min = $null; Media = $null; Max = $null; Jitter = $null; 'Picos>100' = $null; 'Perda%' = 100 }
+
+    # Resolver o nome uma vez so (senao cada ping faz uma consulta DNS e uma falha de DNS conta como perda).
+    $address = $HostName
+    $parsed = $null
+    if (-not [Net.IPAddress]::TryParse($HostName, [ref]$parsed)) {
+        try {
+            $all = @([Net.Dns]::GetHostAddresses($HostName))
+            $v4 = $all | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
+            $address = if ($v4) { $v4.IPAddressToString } else { $all[0].IPAddressToString }
+        } catch {
+            Write-Warn2 "Nao consegui resolver '$HostName' (DNS)."
+            return $empty
+        }
+    }
+
     $ping = New-Object System.Net.NetworkInformation.Ping
     $rtts = New-Object System.Collections.Generic.List[double]
     $lost = 0
-    for ($i = 0; $i -lt $Pings; $i++) {
-        try {
-            $reply = $ping.Send($HostName, 1000)
-            if ($reply.Status -eq 'Success') { $rtts.Add([double]$reply.RoundtripTime) } else { $lost++ }
-        } catch {
-            $lost++
+    try {
+        for ($i = 0; $i -lt $Pings; $i++) {
+            try {
+                $reply = $ping.Send($address, 1000)
+                if ($reply.Status -eq 'Success') { $rtts.Add([double]$reply.RoundtripTime) } else { $lost++ }
+            } catch {
+                $lost++
+            }
+            Start-Sleep -Milliseconds 200
         }
-        Start-Sleep -Milliseconds 200
+    } finally {
+        $ping.Dispose()
     }
 
-    if ($rtts.Count -eq 0) {
-        return [pscustomobject]@{ Alvo = $Label; Host = $HostName; Min = $null; Media = $null; Max = $null; Jitter = $null; 'Picos>100' = $null; 'Perda%' = 100 }
-    }
+    if ($rtts.Count -eq 0) { return $empty }
 
     $jitter = 0.0
     if ($rtts.Count -gt 1) {
@@ -259,6 +318,11 @@ function Show-Comparison($Before, $After) {
 
 function Show-AdapterState {
     Write-Title 'Estado das placas de rede'
+    $wifiPlan = Get-WifiPowerPlan
+    if ($wifiPlan) {
+        Write-Info ("Plano de energia, poupanca do Wi-Fi: ligado a corrente {0}, na bateria {1}" -f (Format-WifiPower $wifiPlan.AC), (Format-WifiPower $wifiPlan.DC))
+    }
+
     $adapters = @(Get-TargetAdapters)
     if ($adapters.Count -eq 0) { Write-Warn2 'Nenhuma placa fisica encontrada.'; return }
 
@@ -330,10 +394,30 @@ function Invoke-Apply {
         Created  = (Get-Date).ToString('s')
         Tool     = "NetTune $Version"
         Computer = $env:COMPUTERNAME
+        WifiPowerPlan = $null
         Adapters = @()
     }
 
     Write-Title 'A aplicar ajustes'
+
+    # O backup e guardado no finally: se algum ajuste der erro a meio, o que ja foi mudado fica registado.
+    try {
+
+    # 0) Poupanca de energia do Wi-Fi no plano de energia do Windows (AC e bateria)
+    $wifiPlan = Get-WifiPowerPlan
+    if ($wifiPlan) {
+        if ($wifiPlan.AC -ne 0 -or $wifiPlan.DC -ne 0) {
+            $backup.WifiPowerPlan = [ordered]@{ Scheme = $wifiPlan.Scheme; AC = $wifiPlan.AC; DC = $wifiPlan.DC }
+            $msg = "Poupanca do Wi-Fi no plano de energia: corrente $(Format-WifiPower $wifiPlan.AC), bateria $(Format-WifiPower $wifiPlan.DC) -> desempenho maximo"
+            if ($PSCmdlet.ShouldProcess('Plano de energia', $msg)) {
+                Set-WifiPowerPlan -Scheme $wifiPlan.Scheme -AC 0 -DC 0
+            }
+            Write-Ok $msg
+        } else {
+            Write-Info 'Poupanca do Wi-Fi no plano de energia: ja em desempenho maximo'
+        }
+    }
+
     foreach ($a in $adapters) {
         Write-Host ''
         Write-Host "  $($a.Name) - $($a.InterfaceDescription)" -ForegroundColor White
@@ -347,6 +431,8 @@ function Invoke-Apply {
             Advanced             = @()
             Dns                  = $null
         }
+        # Entra ja no backup (e uma referencia, as alteracoes abaixo ficam la).
+        $backup.Adapters += $entry
         $changed = $false
 
         # 1) Deixar o Windows desligar a placa para poupar energia
@@ -426,8 +512,6 @@ function Invoke-Apply {
             Write-Ok "DNS -> $Dns"
         }
 
-        $backup.Adapters += $entry
-
         # Reiniciar a placa uma vez so, para aplicar tudo
         if ($changed -and $a.Status -eq 'Up') {
             if ($PSCmdlet.ShouldProcess($a.Name, 'Reiniciar a placa para aplicar')) {
@@ -439,13 +523,17 @@ function Invoke-Apply {
         }
     }
 
+    } finally {
+        if (-not $WhatIfPreference) {
+            $file = Save-Backup $backup
+            Write-Ok "Backup guardado em: $file"
+        }
+    }
+
     if ($WhatIfPreference) {
         Write-Warn2 'Modo -WhatIf: nada foi mudado.'
         return
     }
-
-    $file = Save-Backup $backup
-    Write-Ok "Backup guardado em: $file"
 
     if ($Dns -ne 'Keep') { Clear-DnsClientCache -ErrorAction SilentlyContinue }
 
@@ -479,6 +567,19 @@ function Invoke-Revert {
 
     Write-Title "A repor backup: $(Split-Path $file -Leaf)"
     $data = Get-Content -Path $file -Raw -Encoding UTF8 | ConvertFrom-Json
+
+    # Backups antigos (1.0.0) nao tem esta propriedade; com StrictMode tem de se ver assim.
+    $planProp = $data.PSObject.Properties['WifiPowerPlan']
+    if ($planProp -and $planProp.Value) {
+        $p = $planProp.Value
+        $msg = "Poupanca do Wi-Fi no plano de energia -> corrente $(Format-WifiPower $p.AC), bateria $(Format-WifiPower $p.DC)"
+        if ($PSCmdlet.ShouldProcess('Plano de energia', $msg)) {
+            try {
+                Set-WifiPowerPlan -Scheme $p.Scheme -AC $p.AC -DC $p.DC
+                Write-Ok $msg
+            } catch { Write-Warn2 "Plano de energia: $($_.Exception.Message)" }
+        }
+    }
 
     foreach ($e in @($data.Adapters)) {
         $a = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { [string]$_.InterfaceGuid -eq $e.InterfaceGuid } | Select-Object -First 1
@@ -571,7 +672,7 @@ try {
     exit 1
 } finally {
     if ($transcript) {
-        try { Stop-Transcript | Out-Null } catch { }
+        try { Stop-Transcript -WhatIf:$false | Out-Null } catch { }
         Write-Host "  Log: $transcript" -ForegroundColor DarkGray
     }
 }

@@ -10,6 +10,7 @@ Em cada placa de rede física (Wi-Fi, Ethernet e adaptadores USB):
 
 | Ajuste | Porquê |
 |---|---|
+| Plano de energia → "Adaptador sem fios: modo de poupança de energia" → Desempenho máximo | Por defeito, na bateria o Windows põe o Wi-Fi em poupança média. Jogar sem carregador dá picos. |
 | "Permitir que o computador desligue este dispositivo" → desligado | O Windows deixa de pôr a placa a dormir. |
 | Poupança de energia da placa (Power Saving) → desligada | A placa adormece entre pacotes e demora a acordar, o que dá picos. |
 | Agressividade de roaming → a mais baixa | A placa deixa de procurar outros pontos de acesso a meio do jogo (cada procura congela a ligação). |
