@@ -20,7 +20,8 @@
       - Energy-Efficient Ethernet / Green Ethernet -> desligado
       - Suspensão seletiva USB do adaptador -> desligada
       - RSC (Receive Segment Coalescing) -> desligado
-      - DNS -> só se pedires com -Dns (o DNS NÃO muda o ping nos jogos, só a rapidez a abrir nomes)
+      - DNS -> testa o atual contra Cloudflare, Google, Quad9 e OpenDNS e aplica o mais rápido,
+        só se for claramente melhor (o DNS NÃO muda o ping nos jogos, só a rapidez a abrir nomes)
 
 .PARAMETER Mode
     Test   : só mede e mostra o estado das placas (não precisa de admin, não muda nada). Padrão.
@@ -28,7 +29,9 @@
     Revert : repõe o último backup (ou o indicado em -BackupFile). Precisa de admin.
 
 .PARAMETER Dns
-    Keep (padrão), Cloudflare, Google ou Quad9. Só é aplicado no modo Apply.
+    Auto (padrão): testa o DNS atual contra Cloudflare, Google, Quad9 e OpenDNS e, no Apply, muda para
+    o mais rápido se ganhar pelo menos 3 ms e 15%. Keep: não testa nem mexe no DNS.
+    Cloudflare, Google, Quad9 ou OpenDNS: força esse DNS no Apply, sem testar.
 
 .PARAMETER Count
     Número de pings por alvo nos testes (padrão 50, cerca de 10 s por alvo).
@@ -70,8 +73,8 @@ param(
     [ValidateSet('Test', 'Apply', 'Revert')]
     [string]$Mode = 'Test',
 
-    [ValidateSet('Keep', 'Cloudflare', 'Google', 'Quad9')]
-    [string]$Dns = 'Keep',
+    [ValidateSet('Auto', 'Keep', 'Cloudflare', 'Google', 'Quad9', 'OpenDNS')]
+    [string]$Dns = 'Auto',
 
     [ValidateRange(5, 1000)]
     [int]$Count = 50,
@@ -92,7 +95,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$Version   = '1.4.0'
+$Version   = '1.5.0'
 $Root      = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $BackupDir = Join-Path $Root 'backups'
 $LogDir    = Join-Path $Root 'logs'
@@ -102,7 +105,12 @@ $DnsPresets = @{
     Cloudflare = @('1.1.1.1', '1.0.0.1', '2606:4700:4700::1111', '2606:4700:4700::1001')
     Google     = @('8.8.8.8', '8.8.4.4', '2001:4860:4860::8888', '2001:4860:4860::8844')
     Quad9      = @('9.9.9.9', '149.112.112.112', '2620:fe::fe', '2620:fe::9')
+    OpenDNS    = @('208.67.222.222', '208.67.220.220', '2620:119:35::35', '2620:119:53::53')
 }
+
+# Domínios do teste de DNS (o que usas a jogar: lojas, launchers, chat, streams).
+$DnsTestDomains = @('google.com', 'youtube.com', 'epicgames.com', 'steampowered.com', 'battle.net',
+                    'ubisoft.com', 'xboxlive.com', 'discord.com', 'twitch.tv', 'microsoft.com')
 
 # Regras para as propriedades avançadas das placas.
 # Display: regex contra o nome da propriedade (EN / PT / ES, porque o driver usa a língua do Windows).
@@ -223,13 +231,14 @@ $ExcludeAdapters = 'Bluetooth|Virtual|\bTAP\b|Tunnel|VPN|Wintun|WireGuard|Hyper-
 
 $G = if ($Ascii) {
     @{ Ok = '+'; Bad = 'x'; Warn = '!'; Info = '-'; Sim = '~'; Arrow = '->'; Up = '^'; Down = 'v'
-       H = '-'; V = '|'; TL = '+'; TR = '+'; BL = '+'; BR = '+'; Dot = '.'; Node = '>'; Bullet = '*'; Ell = '.' }
+       H = '-'; V = '|'; TL = '+'; TR = '+'; BL = '+'; BR = '+'; Dot = '.'; Node = '>'; Bullet = '*'; Ell = '.'; Star = '*' }
 } else {
     @{ Ok = [string][char]0x2713; Bad = [string][char]0x2717; Warn = '!'; Info = [string][char]0x00B7; Sim = '~'
        Arrow = [string][char]0x2192; Up = [string][char]0x25B2; Down = [string][char]0x25BC
        H = [string][char]0x2500; V = [string][char]0x2502
        TL = [string][char]0x256D; TR = [string][char]0x256E; BL = [string][char]0x2570; BR = [string][char]0x256F
-       Dot = [string][char]0x00B7; Node = [string][char]0x25C6; Bullet = [string][char]0x25CF; Ell = [string][char]0x2026 }
+       Dot = [string][char]0x00B7; Node = [string][char]0x25C6; Bullet = [string][char]0x25CF; Ell = [string][char]0x2026
+       Star = [string][char]0x2605 }
 }
 
 $StateColor = @{ ok = 'Green'; warn = 'Yellow'; bad = 'Red'; none = 'Gray' }
@@ -842,6 +851,203 @@ function Show-Comparison($Before, $After) {
     Write-Host '   = igual' -ForegroundColor DarkGray
 }
 
+# ---------------------------------------------------------------- dns
+
+function New-DnsQuery([string]$Name, [int]$Id) {
+    # Pacote DNS mínimo: cabeçalho com "recursion desired" + uma pergunta do tipo A.
+    $bytes = New-Object System.Collections.Generic.List[byte]
+    $bytes.AddRange([byte[]]@((($Id -shr 8) -band 0xFF), ($Id -band 0xFF), 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+    foreach ($label in $Name.Split('.')) {
+        $b = [Text.Encoding]::ASCII.GetBytes($label)
+        $bytes.Add([byte]$b.Length)
+        $bytes.AddRange($b)
+    }
+    $bytes.AddRange([byte[]]@(0, 0, 1, 0, 1))   # fim do nome, tipo A, classe IN
+    return $bytes.ToArray()
+}
+
+function Measure-DnsQuery([string]$Server, [string]$Name, [int]$TimeoutMs = 1500) {
+    # Envia uma consulta UDP diretamente ao servidor e mede até à resposta. $null se não responder.
+    $udp = New-Object System.Net.Sockets.UdpClient
+    try {
+        $udp.Client.ReceiveTimeout = $TimeoutMs
+        $id = Get-Random -Minimum 1 -Maximum 65535
+        $query = New-DnsQuery $Name $id
+        $ep = New-Object System.Net.IPEndPoint ([Net.IPAddress]::Parse($Server)), 53
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        [void]$udp.Send($query, $query.Length, $ep)
+        $remote = New-Object System.Net.IPEndPoint ([Net.IPAddress]::Any), 0
+        while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
+            $resp = $udp.Receive([ref]$remote)
+            if ($resp.Length -ge 4 -and $resp[0] -eq (($id -shr 8) -band 0xFF) -and $resp[1] -eq ($id -band 0xFF)) {
+                return [pscustomobject]@{ Ms = $sw.Elapsed.TotalMilliseconds; RCode = ($resp[3] -band 0x0F) }
+            }
+        }
+        return $null
+    } catch {
+        return $null
+    } finally {
+        $udp.Close()
+    }
+}
+
+function Get-Median([double[]]$Values) {
+    if (-not $Values -or $Values.Count -eq 0) { return $null }
+    $s = @($Values | Sort-Object)
+    $n = $s.Count
+    if ($n % 2 -eq 1) { return [double]$s[[int][math]::Floor($n / 2)] }
+    return ([double]$s[$n / 2 - 1] + [double]$s[$n / 2]) / 2
+}
+
+function Get-ActiveDnsServers {
+    # Servidores DNS (IPv4) da placa que tem a rota para a internet.
+    $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+        Where-Object { $_.NextHop -and $_.NextHop -ne '0.0.0.0' } |
+        Sort-Object RouteMetric |
+        Select-Object -First 1
+    if (-not $route) { return @() }
+    try {
+        return @((Get-DnsClientServerAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction Stop).ServerAddresses | Where-Object { $_ })
+    } catch {
+        return @()
+    }
+}
+
+function Invoke-DnsBenchmark {
+    # Compara o DNS atual com os públicos e devolve a decisão: Choice = nome do preset a aplicar, ou $null.
+    Write-Title 'Teste de DNS'
+
+    $current = @(Get-ActiveDnsServers | Select-Object -First 2)
+    $rows = New-Object System.Collections.Generic.List[object]
+    $n = 0
+    foreach ($ip in $current) {
+        $n++
+        $preset = $null
+        foreach ($k in $DnsPresets.Keys) { if ($DnsPresets[$k] -contains $ip) { $preset = $k } }
+        $label = if ($preset) { "Atual ($preset)" } elseif ($current.Count -gt 1) { "Atual $n" } else { 'Atual' }
+        $rows.Add([pscustomobject]@{ Label = $label; Ip = $ip; Preset = $preset; IsCurrent = $true
+            Times = (New-Object System.Collections.Generic.List[double]); Uncached = (New-Object System.Collections.Generic.List[double])
+            Fails = 0; Total = 0; Median = $null; UncMedian = $null; FailPct = 100.0; Dead = $false })
+    }
+    foreach ($k in @('Cloudflare', 'Google', 'Quad9', 'OpenDNS')) {
+        $ip = $DnsPresets[$k][0]
+        if ($current -contains $ip) { continue }
+        $rows.Add([pscustomobject]@{ Label = $k; Ip = $ip; Preset = $k; IsCurrent = $false
+            Times = (New-Object System.Collections.Generic.List[double]); Uncached = (New-Object System.Collections.Generic.List[double])
+            Fails = 0; Total = 0; Median = $null; UncMedian = $null; FailPct = 100.0; Dead = $false })
+    }
+
+    $rounds = 3
+    $uncachedCount = 5
+    Write-Info "$($rows.Count) servidores $($G.Dot) $($DnsTestDomains.Count) domínios x $rounds rondas + $uncachedCount consultas sem cache cada $($G.Dot) valores em ms"
+    if ($current.Count -eq 0) { Write-Warn2 'Não consegui ler o DNS atual da placa ligada; só comparo os públicos.' }
+
+    # Os servidores são intercalados em cada consulta, para todos apanharem as mesmas condições da rede.
+    $totalQ = $rows.Count * ($DnsTestDomains.Count * $rounds + $uncachedCount)
+    $done = 0
+    try {
+        for ($round = 1; $round -le $rounds; $round++) {
+            foreach ($d in $DnsTestDomains) {
+                foreach ($r in $rows) {
+                    $done++
+                    if ($r.Dead) { continue }
+                    if ($done % 4 -eq 0) { Write-Progress -Id 4 -Activity 'Teste de DNS' -Status "Ronda $round/$rounds  $($G.Dot)  $d" -PercentComplete ([int](100 * $done / $totalQ)) }
+                    $res = Measure-DnsQuery $r.Ip $d
+                    $r.Total++
+                    if ($res -and ($res.RCode -eq 0 -or $res.RCode -eq 3)) { $r.Times.Add($res.Ms) } else { $r.Fails++ }
+                    # 3 falhas sem nenhuma resposta: o servidor não chega cá (ou a rede bloqueia). Não vale esperar mais.
+                    if ($r.Times.Count -eq 0 -and $r.Fails -ge 3) { $r.Dead = $true }
+                }
+            }
+        }
+        # Sem cache: nomes aleatórios obrigam o servidor a perguntar aos servidores do domínio.
+        for ($u = 1; $u -le $uncachedCount; $u++) {
+            foreach ($r in $rows) {
+                $done++
+                if ($r.Dead) { continue }
+                Write-Progress -Id 4 -Activity 'Teste de DNS' -Status 'Consultas sem cache...' -PercentComplete ([int](100 * $done / $totalQ))
+                $name = 'nt' + [guid]::NewGuid().ToString('N').Substring(0, 12) + '.google.com'
+                $res = Measure-DnsQuery $r.Ip $name 2500
+                $r.Total++
+                if ($res -and ($res.RCode -eq 0 -or $res.RCode -eq 3)) { $r.Uncached.Add($res.Ms) } else { $r.Fails++ }
+            }
+        }
+    } finally {
+        Write-Progress -Id 4 -Activity 'Teste de DNS' -Completed
+    }
+
+    foreach ($r in $rows) {
+        $r.Median    = Get-Median $r.Times.ToArray()
+        $r.UncMedian = Get-Median $r.Uncached.ToArray()
+        $r.FailPct   = if ($r.Total -gt 0) { [math]::Round(100.0 * $r.Fails / $r.Total, 1) } else { 100.0 }
+    }
+
+    # Só contam servidores fiáveis (até 10% de falhas).
+    $valid   = @($rows | Where-Object { $null -ne $_.Median -and $_.FailPct -le 10 })
+    $fastest = $valid | Sort-Object Median | Select-Object -First 1
+
+    # Tabela
+    Write-Host ''
+    Write-Seg '  '
+    Write-Seg 'DNS'.PadRight(20) DarkGray
+    Write-Seg 'Servidor'.PadRight(17) DarkGray
+    Write-Seg 'Mediana'.PadLeft(8) DarkGray
+    Write-Seg 'Sem cache'.PadLeft(11) DarkGray
+    Write-Host 'Falhas'.PadLeft(8) -ForegroundColor DarkGray
+    Write-Host ('  ' + ($G.H * 82)) -ForegroundColor DarkGray
+    foreach ($r in $rows) {
+        Write-Seg ('  ' + (Format-Fit $r.Label 20)) $(if ($r.IsCurrent) { 'Cyan' } else { 'White' })
+        Write-Seg (Format-Fit $r.Ip 17) DarkGray
+        if ($null -eq $r.Median) {
+            Write-Seg ('-'.PadLeft(8) + '-'.PadLeft(11)) DarkGray
+            Write-Seg '100%'.PadLeft(8) Red
+            Write-Host "    $($G.Bad) não responde" -ForegroundColor Red
+            continue
+        }
+        $gMed = Get-Grade $r.Median 20 50
+        $gUnc = Get-Grade $r.UncMedian 80 200
+        $gFail = Get-Grade $r.FailPct 0 5
+        Write-Seg (Format-Num $r.Median).PadLeft(8) $StateColor[$gMed]
+        Write-Seg (Format-Num $r.UncMedian).PadLeft(11) $StateColor[$gUnc]
+        Write-Seg ((Format-Num $r.FailPct) + '%').PadLeft(8) $StateColor[$gFail]
+        if ($fastest -and $r.Ip -eq $fastest.Ip) { Write-Host "    $($G.Star) mais rápido" -ForegroundColor Green } else { Write-Host '' }
+    }
+    Write-Host ''
+    Write-Host '  Mediana = resposta habitual (com cache)  ·  Sem cache = primeira vez que um nome é pedido' -ForegroundColor DarkGray
+
+    # Decisão: só muda se um DNS público for claramente mais rápido (>= 3 ms e >= 15%) que o atual.
+    $curBest = @($valid | Where-Object { $_.IsCurrent }) | Sort-Object Median | Select-Object -First 1
+    $pubBest = @($valid | Where-Object { -not $_.IsCurrent }) | Sort-Object Median | Select-Object -First 1
+    $choice = $null
+    Write-Host ''
+    $publicRows = @($rows | Where-Object { -not $_.IsCurrent })
+    if (-not $pubBest -and $curBest -and $publicRows.Count -gt 0 -and @($publicRows | Where-Object { $_.Dead }).Count -eq $publicRows.Count) {
+        Write-Warn2 'Os DNS públicos não respondem nesta rede: a porta 53 deve estar bloqueada (comum em redes de escola ou empresa).'
+        Write-Info  'Fica o DNS atual. Mudar agora cortava-te a internet.' 4
+    } elseif (-not $pubBest) {
+        Write-Warn2 'Nenhum DNS público respondeu bem. Fica o atual.'
+    } elseif (-not $curBest) {
+        $choice = $pubBest.Preset
+        Write-Warn2 "O DNS atual não respondeu bem. O mais rápido foi $($pubBest.Label) ($(Format-Num $pubBest.Median) ms)."
+    } else {
+        $diff = $curBest.Median - $pubBest.Median
+        if ($diff -ge 3 -and $pubBest.Median -le 0.85 * $curBest.Median) {
+            $choice = $pubBest.Preset
+            Write-Warn2 "$($pubBest.Label) responde $(Format-Num $diff) ms mais rápido que o teu DNS atual ($(Format-Num $pubBest.Median) vs $(Format-Num $curBest.Median) ms)."
+        } elseif ($diff -gt 0) {
+            Write-Ok "Diferença pequena ($(Format-Num $diff) ms para $($pubBest.Label)): não vale a pena mudar, fica o atual."
+        } else {
+            Write-Ok 'O teu DNS atual já é o mais rápido. Fica como está.'
+        }
+    }
+    if ($choice) {
+        Write-Info "O Apply muda o DNS das placas para $choice ($($DnsPresets[$choice][0]), $($DnsPresets[$choice][1]))." 4
+    }
+    Write-Info 'Nota: o DNS acelera abrir sites e ligar aos serviços. Não muda o ping dentro do jogo.'
+
+    return [pscustomobject]@{ Choice = $choice }
+}
+
 # ---------------------------------------------------------------- estado das placas
 
 function Show-AdapterState {
@@ -952,6 +1158,27 @@ function Invoke-Apply {
     if (-not $SkipTest) { $before = Invoke-NetTest 'Teste antes dos ajustes' }
 
     [void](Show-AdapterState)
+
+    # DNS: Auto = testar e usar o mais rápido (se valer a pena); Keep = não mexer; nome = forçar esse.
+    $dnsChoice = $null
+    switch ($Dns) {
+        'Keep'  { }
+        'Auto'  { $dnsChoice = (Invoke-DnsBenchmark).Choice }
+        default {
+            # Forçado: confirmar primeiro que esse DNS responde nesta rede (há redes que bloqueiam DNS externo).
+            $okCount = 0
+            foreach ($d in @('google.com', 'microsoft.com', 'cloudflare.com')) {
+                $res = Measure-DnsQuery $DnsPresets[$Dns][0] $d
+                if ($res -and ($res.RCode -eq 0 -or $res.RCode -eq 3)) { $okCount++ }
+            }
+            if ($okCount -ge 2) {
+                $dnsChoice = $Dns
+            } else {
+                Write-Host ''
+                Write-Warn2 "O DNS $Dns ($($DnsPresets[$Dns][0])) não responde nesta rede. Não vou mudar o DNS, senão ficavas sem internet."
+            }
+        }
+    }
 
     $adapters = @(Get-TargetAdapters)
     if ($adapters.Count -eq 0) { throw 'Nenhuma placa física encontrada.' }
@@ -1095,14 +1322,21 @@ function Invoke-Apply {
             Write-Change $p.DisplayName $p.DisplayValue $target
         }
 
-        # 4) DNS (opcional)
-        if ($Dns -ne 'Keep') {
-            $entry.Dns = Get-DnsBackup $a
-            $servers = $DnsPresets[$Dns]
-            if ($PSCmdlet.ShouldProcess($a.Name, "DNS -> $Dns ($($servers -join ', '))")) {
-                Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses $servers -ErrorAction Stop
+        # 4) DNS: o mais rápido do teste (-Dns Auto) ou o que pediste com -Dns
+        if ($dnsChoice) {
+            $servers = $DnsPresets[$dnsChoice]
+            $nowDns = @()
+            try { $nowDns = @((Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction Stop).ServerAddresses | Where-Object { $_ }) } catch { }
+            if ($nowDns.Count -ge 2 -and $nowDns[0] -eq $servers[0] -and $nowDns[1] -eq $servers[1]) {
+                Write-Info "DNS: já está em $dnsChoice" 4
+            } else {
+                $entry.Dns = Get-DnsBackup $a
+                $fromText = if ($nowDns.Count -gt 0) { (@($nowDns) | Select-Object -First 2) -join ', ' } else { 'automático' }
+                if ($PSCmdlet.ShouldProcess($a.Name, "DNS -> $dnsChoice ($($servers -join ', '))")) {
+                    Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses $servers -ErrorAction Stop
+                }
+                Write-Change 'DNS' $fromText "$dnsChoice ($($servers[0]), $($servers[1]))"
             }
-            Write-Change 'DNS' 'atual' "$Dns ($($servers[0]), $($servers[1]))"
         }
 
         # Reiniciar a placa uma vez só, para aplicar tudo
@@ -1135,7 +1369,7 @@ function Invoke-Apply {
         return
     }
 
-    if ($Dns -ne 'Keep') { Clear-DnsClientCache -ErrorAction SilentlyContinue }
+    if ($dnsChoice) { Clear-DnsClientCache -ErrorAction SilentlyContinue }
 
     Write-Host ''
     Write-Info 'À espera que a rede volte...'
@@ -1316,7 +1550,15 @@ try {
         'Test' {
             $pending = Show-AdapterState
             [void](Invoke-NetTest 'Teste de ligação')
+            $dnsChoice = $null
+            if ($Dns -ne 'Keep') {
+                $dnsChoice = (Invoke-DnsBenchmark).Choice
+                if ($dnsChoice) { $pending++ }
+            }
             $lines = @()
+            if ($dnsChoice) {
+                $lines += ,@($G.Star, 'Green', "DNS mais rápido: $dnsChoice (o Apply muda)")
+            }
             if ($pending -gt 0) {
                 $lines += ,@($G.Warn, 'Yellow', "$pending ajuste(s) por fazer (marcados com $($G.Warn) acima)")
                 $lines += ,@($G.Arrow, 'Cyan', 'Ensaio:  .\NetTune.ps1 -Mode Apply -WhatIf')

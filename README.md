@@ -17,7 +17,7 @@ Em cada placa de rede física (Wi-Fi, Ethernet e adaptadores USB):
 | Energy-Efficient Ethernet / Green Ethernet → desligado | Mesmo problema, mas no cabo. |
 | Suspensão seletiva USB → desligada | Para adaptadores Ethernet USB. |
 | RSC (Receive Segment Coalescing) → desligado | Junta pacotes para poupar CPU, o que é bom para downloads e mau para latência. |
-| DNS → **só se pedires** (`-Dns`) | Cloudflare, Google ou Quad9. |
+| DNS → **o mais rápido**, só se for claramente melhor | Testa o teu DNS atual contra Cloudflare, Google, Quad9 e OpenDNS e muda só se ganhar pelo menos 3 ms e 15% (ver abaixo). |
 
 Os nomes das opções variam conforme o driver e a língua do Windows. O script reconhece-os em inglês, português e espanhol.
 
@@ -42,7 +42,10 @@ powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -WhatIf
 # 3. Aplicar (mede antes, faz backup, aplica, mede depois e compara)
 powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply
 
-# 3b. Aplicar e mudar o DNS para Cloudflare
+# 3b. Aplicar sem mexer no DNS
+powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -Dns Keep
+
+# 3c. Aplicar e forçar o DNS da Cloudflare (sem testar os outros)
 powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -Dns Cloudflare
 
 # 4. Desfazer tudo (usa o backup mais recente)
@@ -95,6 +98,19 @@ Com poucos pings (por exemplo `-Count 5`), um único pacote perdido já dá 20% 
 **Antes vs depois** (no Apply). Mostra a média, o jitter e a perda com `▼` verde quando melhorou, `▲` vermelho quando piorou e `=` quando ficou igual.
 
 **A regra de ouro:** se o ping ao **router** está alto ou tem picos, o problema está no teu PC ou no Wi-Fi, não na operadora nem no jogo. O router está ao teu lado; 1-5 ms é o normal.
+
+## Teste de DNS
+
+Por defeito (`-Dns Auto`), o modo Test e o Apply comparam o DNS que estás a usar (o da placa ligada à internet) com **Cloudflare**, **Google**, **Quad9** e **OpenDNS**.
+
+- **Como mede:** o script envia consultas DNS diretamente a cada servidor (UDP, porta 53), sem passar pela cache do Windows. São 10 domínios que usas a jogar (Epic, Steam, Battle.net, Ubisoft, Xbox, Discord, Twitch...) × 3 rondas, mais 5 nomes aleatórios que obrigam o servidor a ir perguntar ao domínio. Os servidores são intercalados, para todos apanharem as mesmas condições da rede.
+- **Colunas:** *Mediana* é o tempo habitual de resposta (com cache), *Sem cache* é a primeira vez que um nome é pedido, *Falhas* são as consultas sem resposta. O mais rápido leva `★`.
+- **Quando muda:** só se um DNS público for **pelo menos 3 ms e 15% mais rápido** que o atual, e com menos de 10% de falhas. Diferenças pequenas são ruído e não justificam mudar.
+- **Onde muda:** em todas as placas, com IPv4 e IPv6 do mesmo fornecedor, e fica no backup (o Revert repõe o DNS antigo, incluindo "automático/DHCP").
+- **Redes que bloqueiam DNS externo** (escolas, empresas, algumas redes públicas): os DNS públicos aparecem como "não responde" e o script **não muda nada**, porque mudar cortava-te a internet. Com `-Dns Cloudflare` (forçado), o script confirma primeiro que esse DNS responde. Se não responder, recusa.
+- **Honestidade:** o DNS só acelera abrir sites e ligar aos serviços (login, lojas, matchmaking). **Não muda o ping dentro do jogo.**
+
+Opções: `-Dns Auto` (padrão), `-Dns Keep` (não testa nem mexe), `-Dns Cloudflare | Google | Quad9 | OpenDNS` (força esse, depois de confirmar que responde).
 
 ## Servidores de jogos
 
