@@ -101,12 +101,15 @@ Com poucos pings (por exemplo `-Count 5`), um único pacote perdido já dá 20% 
 
 ## Teste de DNS
 
-Por defeito (`-Dns Auto`), o modo Test e o Apply comparam o DNS que estás a usar (o da placa ligada à internet) com **Cloudflare**, **Google**, **Quad9** e **OpenDNS**.
+Por defeito (`-Dns Auto`), o modo Test e o Apply testam **Cloudflare**, **Google**, **Quad9** e **OpenDNS**, e mostram também o DNS que estás a usar como referência. O DNS atual é o da placa que está mesmo a levar o tráfego para a internet, a rota que o próprio Windows escolhe; uma placa desligada com uma rota antiga não conta.
 
 - **Como mede:** o script envia consultas DNS diretamente a cada servidor (UDP, porta 53), sem passar pela cache do Windows. São 10 domínios que usas a jogar (Epic, Steam, Battle.net, Ubisoft, Xbox, Discord, Twitch...) × 3 rondas, mais 5 nomes aleatórios que obrigam o servidor a ir perguntar ao domínio. Os servidores são intercalados, para todos apanharem as mesmas condições da rede.
-- **Colunas:** *Mediana* é o tempo habitual de resposta (com cache), *Sem cache* é a primeira vez que um nome é pedido, *Falhas* são as consultas sem resposta. O mais rápido leva `★`.
-- **Quando muda:** só se um DNS público for **pelo menos 3 ms e 15% mais rápido** que o atual, e com menos de 10% de falhas. Diferenças pequenas são ruído e não justificam mudar.
-- **Onde muda:** em todas as placas, com IPv4 e IPv6 do mesmo fornecedor, e fica no backup (o Revert repõe o DNS antigo, incluindo "automático/DHCP").
+- **Colunas:** *Mediana* é o tempo habitual de resposta (com cache), *Sem cache* é a primeira vez que um nome é pedido, *Falhas* são as consultas sem resposta. O escolhido leva `★`.
+- **O router não conta.** Se o teu DNS é o router (por exemplo `192.168.1.254`) ou outro IP da rede local, ele só reencaminha para o DNS da operadora. Responde em ~1 ms porque guarda cache na rede local, mas isso não é comparável com um DNS a sério. Aparece na tabela só como referência ("cache local, não conta").
+- **Como escolhe:** pontuação = 70% mediana + 30% sem cache, só entre DNS públicos com até 10% de falhas. Diferenças até **5 ms (ou 20%)** contam como empate, porque o mesmo servidor varia isso de um teste para outro. Em empate prefere **Cloudflare**, depois Google (o Quad9 e o OpenDNS filtram domínios).
+- **Quando muda:** se o teu DNS é o router ou o da operadora, muda para o escolhido. Se já usas um DNS público, só troca se o outro for melhor por mais do que a margem de empate.
+- **Como aplica:** em cada placa, **IPv4 e IPv6 em separado**, definidos à mão (`netsh`, pelo índice da placa). Depois volta a ler cada família e só mostra `✓` se ficou mesmo aplicada. Se o IPv6 estiver desligado na placa, só define o IPv4.
+- **Backup e Revert:** o DNS antigo de cada família fica no backup. O Revert repõe cada uma (a lista fixa antiga, ou automático/DHCP se não havia).
 - **Redes que bloqueiam DNS externo** (escolas, empresas, algumas redes públicas): os DNS públicos aparecem como "não responde" e o script **não muda nada**, porque mudar cortava-te a internet. Com `-Dns Cloudflare` (forçado), o script confirma primeiro que esse DNS responde. Se não responder, recusa.
 - **Honestidade:** o DNS só acelera abrir sites e ligar aos serviços (login, lojas, matchmaking). **Não muda o ping dentro do jogo.**
 
