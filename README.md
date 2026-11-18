@@ -4,6 +4,16 @@ PowerShell script for Windows 10/11 that **measures** your connection, applies *
 
 It started from a real case: a laptop with a **MediaTek MT7925 (Wi-Fi 7)** card had 700 ms spikes in Fortnite. The culprits were the card's power saving and roaming. After the tweaks, the ping to the router went from a **144 ms average to 3 ms**.
 
+## Screenshots
+
+**Connection test** (ping, jitter, spikes and loss to the router, DNS and game servers):
+
+![NetTune connection test](docs/nettune-test.png)
+
+**DNS test** (switches only when another public DNS clearly wins):
+
+![NetTune DNS test](docs/nettune-dns.png)
+
 ## What it does
 
 On each physical network adapter (Wi-Fi, Ethernet and USB adapters):
