@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NetTune — Stable ping, no placebo</title>
+<meta name="description" content="Honest Windows network tweaks for a stable gaming ping. NetTune measures your connection, applies only what really helps, picks the fastest DNS, and can undo everything." />
+<meta property="og:title" content="NetTune — Stable ping, no placebo" />
+<meta property="og:description" content="A PowerShell tool for Windows 10/11 that measures, fixes and proves it. 144 ms → 3 ms average ping to the router on a Wi-Fi 7 laptop." />
+<meta property="og:type" content="website" />
+<meta name="theme-color" content="#0b0708" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23c7343a'/%3E%3Cpath d='M6 20h5l3-9 4 13 3-7h5' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0b0708;
+    --bg-2: #120a0c;
+    --panel: #170d10;
+    --panel-2: #1e1114;
+    --line: #2e1a1e;
+    --text: #f4ecec;
+    --muted: #b3a2a4;
+    --dim: #7d6b6e;
+    --red: #c7343a;
+    --red-hi: #f06a6f;
+    --pink: #f4a3a5;
+    --green: #3ddc84;
+    --yellow: #f5c84c;
+    --radius: 14px;
+    --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+    --display: "Space Grotesk", system-ui, sans-serif;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--pink); text-decoration: none; }
+  a:hover { color: #fff; }
+  img { max-width: 100%; display: block; }
+  code, pre, kbd { font-family: var(--mono); }
+  .wrap { width: min(1120px, 100% - 40px); margin-inline: auto; }
+
+  /* ---------- nav ---------- */
+  header.nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(12px);
+    background: rgba(11, 7, 8, 0.72);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 700; font-size: 20px; color: var(--text); }
+  .logo svg { width: 28px; height: 28px; }
+  .logo b { color: var(--red-hi); font-weight: 700; }
+  .nav nav { display: flex; gap: 26px; align-items: center; }
+  .nav nav a { color: var(--muted); font-size: 14px; font-weight: 500; }
+  .nav nav a:hover { color: var(--text); }
+  .nav .gh {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; color: var(--text) !important;
+  }
+  .nav .gh:hover { border-color: var(--red); }
+  @media (max-width: 760px) { .nav nav a:not(.gh) { display: none; } }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; padding: 88px 0 72px; overflow: hidden; }
+  .hero::before {
+    content: ""; position: absolute; inset: -40% -10% auto -10%; height: 900px;
+    background:
+      radial-gradient(600px 380px at 78% 30%, rgba(199, 52, 58, 0.28), transparent 70%),
+      radial-gradient(500px 300px at 10% 10%, rgba(122, 29, 34, 0.35), transparent 70%);
+    pointer-events: none;
+  }
+  .grid-bg {
+    position: absolute; inset: 0; pointer-events: none; opacity: .35;
+    background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: radial-gradient(ellipse at 50% 0%, #000 20%, transparent 70%);
+  }
+  .hero .wrap { position: relative; display: grid; grid-template-columns: 1.05fr 1fr; gap: 56px; align-items: center; }
+  @media (max-width: 960px) { .hero .wrap { grid-template-columns: 1fr; } }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--pink);
+    border: 1px solid rgba(199,52,58,.45); background: rgba(199,52,58,.08);
+    padding: 5px 12px; border-radius: 999px;
+  }
+  .eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px var(--green); }
+  h1 {
+    font-family: var(--display); font-weight: 700;
+    font-size: clamp(42px, 6.2vw, 72px); line-height: 1.02; letter-spacing: -0.03em;
+    margin: 22px 0 18px;
+  }
+  h1 .accent { color: var(--red-hi); }
+  .lead { color: var(--muted); font-size: 18px; max-width: 540px; margin: 0 0 30px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-weight: 600; font-size: 15px; padding: 13px 20px; border-radius: 10px;
+    border: 1px solid transparent; transition: transform .15s ease, background .15s ease, border-color .15s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: var(--red); color: #fff; box-shadow: 0 10px 30px -10px rgba(199,52,58,.7); }
+  .btn-primary:hover { background: #d9474c; color: #fff; }
+  .btn-ghost { border-color: var(--line); color: var(--text); background: rgba(255,255,255,.02); }
+  .btn-ghost:hover { border-color: var(--red); color: #fff; }
+  .btn small { font-family: var(--mono); font-weight: 400; opacity: .8; font-size: 12px; }
+  .meta { margin-top: 18px; font-size: 13px; color: var(--dim); font-family: var(--mono); }
+
+  /* terminal */
+  .term {
+    background: linear-gradient(180deg, #140a0c, #0d0708);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: 0 40px 80px -40px rgba(0,0,0,.9), 0 0 0 1px rgba(199,52,58,.08), 0 0 60px -20px rgba(199,52,58,.35);
+    overflow: hidden;
+  }
+  .term-bar { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.015); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .term-bar i:nth-child(1) { background: #ff5f57; } .term-bar i:nth-child(2) { background: #febc2e; } .term-bar i:nth-child(3) { background: #28c840; }
+  .term-bar span { margin-left: 10px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+  .term pre {
+    margin: 0; padding: 18px 18px 22px; min-height: 340px;
+    font-size: 13px; line-height: 1.75; color: #e9dcdc; white-space: pre; overflow-x: auto;
+  }
+  @media (max-width: 520px) { .term pre { font-size: 10.5px; padding: 14px; min-height: 0; } .stat .num { font-size: 30px; } .stat .num s { font-size: 20px; } }
+  .t-prompt { color: var(--red-hi); }
+  .t-dim { color: var(--dim); }
+  .t-ok { color: var(--green); }
+  .t-warn { color: var(--yellow); }
+  .t-bad { color: var(--red-hi); }
+  .t-big { font-weight: 800; color: #fff; }
+  .cursor { display: inline-block; width: 8px; height: 15px; background: var(--pink); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ---------- stats ---------- */
+  .stats { border-block: 1px solid var(--line); background: var(--bg-2); }
+  .stats .wrap { display: grid; grid-template-columns: repeat(4, 1fr); }
+  .stat { padding: 30px 22px; border-right: 1px solid var(--line); }
+  .stat:last-child { border-right: 0; }
+  .stat .num { font-family: var(--display); font-size: 38px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+  .stat .num s { color: var(--dim); text-decoration-thickness: 2px; font-size: 26px; margin-right: 8px; }
+  .stat .num em { font-style: normal; color: var(--red-hi); }
+  .stat p { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+  @media (max-width: 820px) {
+    .stats .wrap { grid-template-columns: repeat(2, 1fr); }
+    .stat:nth-child(2) { border-right: 0; }
+    .stat:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: 96px 0; }
+  .kicker { font-family: var(--mono); font-size: 13px; color: var(--red-hi); letter-spacing: .08em; text-transform: uppercase; }
+  h2 { font-family: var(--display); font-size: clamp(30px, 4vw, 44px); letter-spacing: -0.02em; line-height: 1.1; margin: 12px 0 16px; }
+  .sub { color: var(--muted); font-size: 17px; max-width: 640px; margin: 0; }
+
+  /* story */
+  .story .wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  @media (max-width: 900px) { .story .wrap { grid-template-columns: 1fr; } }
+  .chart {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px;
+  }
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--mono); font-size: 12px; color: var(--dim); margin-bottom: 10px; }
+  .legend { display: flex; gap: 16px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; background: currentColor; }
+  .chart svg { width: 100%; height: auto; }
+
+  /* features */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; margin-top: 44px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px;
+    transition: border-color .2s ease, transform .2s ease, background .2s ease;
+  }
+  .card:hover { border-color: rgba(199,52,58,.6); transform: translateY(-2px); background: var(--panel-2); }
+  .card .ico { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: rgba(199,52,58,.12); color: var(--red-hi); margin-bottom: 14px; }
+  .card .ico svg { width: 20px; height: 20px; }
+  .card h3 { font-family: var(--display); font-size: 18px; margin: 0 0 6px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .card code { font-size: 12.5px; color: var(--pink); background: rgba(244,163,165,.08); padding: 1px 6px; border-radius: 5px; }
+
+  /* honesty */
+  .honest { background: var(--bg-2); border-block: 1px solid var(--line); }
+  .nots { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 40px; }
+  @media (max-width: 760px) { .nots { grid-template-columns: 1fr; } }
+  .not { display: flex; gap: 14px; padding: 20px; border: 1px dashed #3a2226; border-radius: var(--radius); }
+  .not .x { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: rgba(199,52,58,.15); color: var(--red-hi); font-weight: 800; font-family: var(--mono); }
+  .not h3 { margin: 0 0 4px; font-size: 16px; font-family: var(--display); }
+  .not p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+  /* steps */
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 44px; counter-reset: s; }
+  @media (max-width: 900px) { .steps { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 520px) { .steps { grid-template-columns: 1fr; } }
+  .step { position: relative; padding: 24px 22px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  .step::before {
+    counter-increment: s; content: "0" counter(s);
+    font-family: var(--mono); font-weight: 800; font-size: 13px; color: var(--red-hi);
+    display: block; margin-bottom: 14px;
+  }
+  .step h3 { margin: 0 0 6px; font-family: var(--display); font-size: 19px; }
+  .step p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+  /* screenshots */
+  .shots { display: grid; gap: 22px; margin-top: 44px; }
+  figure { margin: 0; }
+  .shot { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #0c0c0c; }
+  .shot img { width: 100%; }
+  .shots figure { max-width: 920px; }
+  section, [id] { scroll-margin-top: 80px; }
+  figcaption { color: var(--dim); font-size: 13.5px; margin-top: 10px; font-family: var(--mono); }
+
+  /* usage */
+  .usage .wrap { display: grid; grid-template-columns: .8fr 1.2fr; gap: 48px; align-items: start; }
+  @media (max-width: 900px) { .usage .wrap { grid-template-columns: 1fr; } }
+  .note { margin-top: 22px; padding: 16px 18px; border-left: 3px solid var(--red); background: rgba(199,52,58,.07); border-radius: 0 10px 10px 0; color: var(--muted); font-size: 14.5px; }
+  .note b { color: var(--text); }
+  .cmds { display: grid; gap: 12px; }
+  .cmd { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .cmd-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 13.5px; color: var(--muted); }
+  .cmd-head b { color: var(--text); font-weight: 600; }
+  .copy {
+    font-family: var(--mono); font-size: 12px; color: var(--muted); background: transparent;
+    border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; cursor: pointer;
+  }
+  .copy:hover { color: #fff; border-color: var(--red); }
+  .copy.done { color: var(--green); border-color: var(--green); }
+  .cmd pre { margin: 0; padding: 14px; font-size: 13px; overflow-x: auto; color: #eadede; }
+  .cmd pre .p { color: var(--red-hi); user-select: none; }
+
+  /* servers */
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
+  .chip { font-family: var(--mono); font-size: 13.5px; padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+  .chip span { color: var(--dim); margin-left: 6px; }
+
+  /* faq */
+  .faq { display: grid; gap: 10px; margin-top: 36px; max-width: 820px; }
+  details { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 0 20px; }
+  details[open] { border-color: rgba(199,52,58,.5); }
+  summary { cursor: pointer; list-style: none; padding: 18px 0; font-weight: 600; display: flex; justify-content: space-between; gap: 14px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; font-family: var(--mono); color: var(--red-hi); font-size: 18px; line-height: 1; }
+  details[open] summary::after { content: "–"; }
+  details p { margin: 0 0 18px; color: var(--muted); font-size: 15px; }
+
+  /* final cta */
+  .final { text-align: center; padding: 100px 0 110px; position: relative; overflow: hidden; }
+  .final::before { content: ""; position: absolute; inset: auto 0 -260px 0; height: 520px; background: radial-gradient(closest-side, rgba(199,52,58,.32), transparent); pointer-events: none; }
+  .final h2 { font-size: clamp(34px, 5vw, 56px); }
+  .final .cta { justify-content: center; margin-top: 28px; }
+
+  footer { border-top: 1px solid var(--line); padding: 28px 0; color: var(--dim); font-size: 14px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal { opacity: 1; transform: none; transition: none; }
+    .cursor { animation: none; }
+    .btn, .card { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="logo" href="#top" aria-label="NetTune home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#c7343a"/><path d="M6 20h5l3-9 4 13 3-7h5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Net<b>Tune</b></span>
+    </a>
+    <nav aria-label="Main">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#usage">Usage</a>
+      <a href="#faq">FAQ</a>
+      <a class="gh" href="https://github.com/dmparede/NetTune">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="grid-bg" aria-hidden="true"></div>
+    <div class="wrap">
+      <div>
+        <span class="eyebrow"><span class="dot" aria-hidden="true"></span>v1.6.0 · Windows 10/11 · PowerShell</span>
+        <h1>Stable ping.<br /><span class="accent">No placebo.</span></h1>
+        <p class="lead">NetTune measures your connection, applies only the network tweaks that actually move latency, and measures again to prove it. Everything is backed up and can be undone with one command.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
+            Download NetTune.ps1 <small>v1.6.0</small>
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/dmparede/NetTune">View the source</a>
+        </div>
+        <p class="meta">Free &amp; open source · MIT license · no installer</p>
+      </div>
+
+      <div class="term" role="img" aria-label="Example NetTune run: average ping to the router drops from 144 ms to 3 ms">
+        <div class="term-bar"><i></i><i></i><i></i><span>Windows PowerShell — NetTune · example run</span></div>
+        <pre id="term"><span class="t-prompt">PS&gt;</span> .\NetTune.ps1 -Mode Apply
+<span class="t-dim">· 9 targets · 50 samples each · values in ms</span>
+
+<span class="t-dim">BEFORE</span>  Router    avg <span class="t-bad">144.0</span>  max <span class="t-bad">700+</span>
+<span class="t-dim">───────</span> backup saved → backups\backup.json
+<span class="t-ok">✓</span> Wi-Fi power saving      → <span class="t-ok">off</span>
+<span class="t-ok">✓</span> Roaming aggressiveness  → <span class="t-ok">lowest</span>
+<span class="t-ok">✓</span> Allow PC to turn it off → <span class="t-ok">no</span>
+<span class="t-ok">✓</span> RSC                     → <span class="t-ok">off</span>
+<span class="t-dim">AFTER</span>   Router    avg <span class="t-big">3.0</span>  <span class="t-ok">▼ 141 ms</span>  loss <span class="t-ok">0%</span>
+
+<span class="t-ok">✓ Router connection is stable.</span> <span class="cursor"></span></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATS -->
+  <div class="stats">
+    <div class="wrap">
+      <div class="stat"><div class="num"><s>144</s><em>3</em> ms</div><p>Average ping to the router after Apply, on a Wi-Fi 7 laptop</p></div>
+      <div class="stat"><div class="num">9</div><p>Targets tested: router, DNS and the closest game servers</p></div>
+      <div class="stat"><div class="num">0</div><p>Placebo registry tweaks. Only what measurably helps</p></div>
+      <div class="stat"><div class="num">1</div><p>Command to undo everything, from an automatic backup</p></div>
+    </div>
+  </div>
+
+  <!-- STORY -->
+  <section class="story">
+    <div class="wrap">
+      <div class="reveal">
+        <span class="kicker">Why it exists</span>
+        <h2>700&nbsp;ms spikes in the middle of a match.</h2>
+        <p class="sub">It started with a laptop with a MediaTek MT7925 Wi-Fi 7 card that kept freezing in Fortnite. The internet was fine. The culprits were the card's power saving and roaming scans, both on by default.</p>
+        <p class="sub" style="margin-top:14px">NetTune turns that diagnosis into a repeatable tool: test, fix the few settings that matter, test again, and show you the difference in numbers.</p>
+      </div>
+      <div class="chart reveal" aria-label="Ping to the router before and after NetTune">
+        <div class="chart-head">
+          <span>ping to router (ms) · illustration</span>
+          <span class="legend"><span style="color:#7d6b6e">before</span><span style="color:#f06a6f">after</span></span>
+        </div>
+        <svg viewBox="0 0 500 220" role="img" aria-label="Before: frequent spikes up to about 700 ms. After: flat line near 3 ms.">
+          <g stroke="#2e1a1e" stroke-width="1">
+            <line x1="0" y1="40" x2="500" y2="40"/><line x1="0" y1="100" x2="500" y2="100"/><line x1="0" y1="160" x2="500" y2="160"/>
+          </g>
+          <g font-family="JetBrains Mono, monospace" font-size="10" fill="#7d6b6e">
+            <text x="4" y="36">600</text><text x="4" y="96">300</text><text x="4" y="156">100</text>
+          </g>
+          <polyline fill="none" stroke="#7d6b6e" stroke-width="2" stroke-linejoin="round"
+            points="0,196 20,188 40,192 55,60 70,190 90,185 110,192 125,120 140,189 160,193 180,186 195,30 210,188 230,191 250,180 265,150 280,190 300,187 320,192 335,75 350,189 370,184 390,193 405,140 420,188 440,190 460,182 475,95 490,191 500,189"/>
+          <polyline fill="none" stroke="#f06a6f" stroke-width="2.5" stroke-linejoin="round"
+            points="0,209 25,208 50,209 75,208 100,209 125,209 150,208 175,209 200,209 225,208 250,209 275,209 300,208 325,209 350,209 375,208 400,209 425,209 450,208 475,209 500,209"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features" style="padding-top:20px">
+    <div class="wrap">
+      <span class="kicker">What it tweaks</span>
+      <h2>Only settings with a real effect on latency.</h2>
+      <p class="sub">Applied on every physical adapter: Wi-Fi, Ethernet and USB. Option names are recognized in English, Portuguese and Spanish drivers.</p>
+      <div class="cards">
+        <article class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
+          <h3>Wi-Fi power plan</h3>
+          <p>"Wireless Adapter Settings" set to maximum performance, so gaming on battery stops causing spikes.</p>
+        </article>
+        <article class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 11-12.73 0M12 2v10"/></svg></div>
+          <h3>No sleeping adapter</h3>
+          <p>"Allow the computer to turn off this device" off, via <code>PnPCapabilities = 24</code>. Takes effect after a restart.</p>
+        </article>
+        <article class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0114 0M8.53 16.11a6 6 0 016.95 0M12 20h.01M1.42 9a16 16 0 0121.16 0"/></svg></div>
+          <h3>Adapter power saving off</h3>
+          <p>The card stops dozing between packets, which is what makes it slow to wake up mid-game.</p>
+        </article>
+        <article class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg></div>
+          <h3>Roaming at lowest</h3>
+          <p>No more scanning for other access points during a match. Every scan freezes the connection.</p>
+        </article>
+        <article class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 11h.01M10 11h.01"/></svg></div>
+          <h3>Green Ethernet &amp; EEE off</h3>
+          <p>Energy-Efficient Ethernet causes the same problem on the cable. USB selective suspend goes too.</p>
+        </article>
+        <article class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h6"/></svg></div>
+          <h3>RSC off</h3>
+          <p>Receive Segment Coalescing merges packets to save CPU. Great for downloads, bad for latency.</p>
+        </article>
+        <article class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20"/></svg></div>
+          <h3>Fastest DNS, only if it wins</h3>
+          <p>Tests Cloudflare, Google, Quad9 and OpenDNS with uncached queries and switches only when one clearly wins.</p>
+        </article>
+        <article class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg></div>
+          <h3>Backup &amp; revert</h3>
+          <p>Every original value is saved to JSON before anything changes. <code>-Mode Revert</code> puts it all back.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- HONESTY -->
+  <section class="honest">
+    <div class="wrap">
+      <span class="kicker">What it does not do, on purpose</span>
+      <h2>No miracle tweaks.</h2>
+      <p class="sub">A lot of "gaming network optimizers" change dozens of settings that do nothing for in-game ping. NetTune skips them.</p>
+      <div class="nots">
+        <div class="not reveal"><span class="x">×</span><div><h3>TCP tweaks</h3><p>Nagle, <code>TcpAckFrequency</code>, <code>TCPNoDelay</code>: games use UDP, so these change nothing in a match.</p></div></div>
+        <div class="not reveal"><span class="x">×</span><div><h3>NetworkThrottlingIndex &amp; co.</h3><p>No evidence they improve ping, and some make other things worse.</p></div></div>
+        <div class="not reveal"><span class="x">×</span><div><h3>"DNS lowers your ping"</h3><p>DNS only turns names into IPs before connecting. Faster logins and stores, yes. In-game ping, no.</p></div></div>
+        <div class="not reveal"><span class="x">×</span><div><h3>VPNs, virtual adapters, Bluetooth</h3><p>Left untouched and ignored, so nothing else on your PC breaks.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW -->
+  <section id="how">
+    <div class="wrap">
+      <span class="kicker">How it works</span>
+      <h2>Measure. Fix. Prove it.</h2>
+      <div class="steps">
+        <div class="step reveal"><h3>Measure</h3><p>50 pings to your router, DNS and the closest Epic, Valve, Blizzard, Ubisoft, Xbox and Embark servers: average, jitter, spikes and loss.</p></div>
+        <div class="step reveal"><h3>Back up</h3><p>The current value of every option it may touch is saved, including the old DNS for IPv4 and IPv6.</p></div>
+        <div class="step reveal"><h3>Apply</h3><p>Only the settings above, read back afterwards. A <span style="color:var(--green)">✓</span> means it really changed.</p></div>
+        <div class="step reveal"><h3>Measure again</h3><p>Same servers, fair comparison: <span style="color:var(--green)">▼</span> when it improved, <span style="color:var(--red-hi)">▲</span> when it got worse.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCREENSHOTS -->
+  <section id="screens" style="padding-top:0">
+    <div class="wrap">
+      <span class="kicker">The real thing</span>
+      <h2>Straight from the console.</h2>
+      <div class="shots">
+        <figure class="reveal">
+          <div class="shot"><img src="nettune-test.png" alt="NetTune connection test table: router, Cloudflare, Google and game servers with min, average, max, jitter, spikes and loss, all with 0% loss" width="908" height="362" /></div>
+          <figcaption>Connection test on an already-optimized PC: 0.5 ms to the router, 0% loss everywhere.</figcaption>
+        </figure>
+        <figure class="reveal">
+          <div class="shot"><img src="nettune-dns.png" alt="NetTune DNS test comparing Cloudflare, Google, Quad9 and OpenDNS by median and uncached response time" width="810" height="290" /></div>
+          <figcaption>DNS test: Cloudflare is already the best here, so NetTune leaves it alone.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- USAGE -->
+  <section id="usage" class="usage" style="background:var(--bg-2);border-block:1px solid var(--line)">
+    <div class="wrap">
+      <div>
+        <span class="kicker">Usage</span>
+        <h2>One script. Four commands.</h2>
+        <p class="sub">Open <b>Windows PowerShell as administrator</b> (the blue one, 5.1) in the folder where you saved <code>NetTune.ps1</code>.</p>
+        <div class="note"><b>Restart after Apply and after Revert.</b> The "allow the computer to turn off this device" option only changes after a restart. NetTune tells you at the end.</div>
+        <div class="note">The connection drops for a few seconds during Apply while the adapters restart.</div>
+      </div>
+      <div class="cmds">
+        <div class="cmd"><div class="cmd-head"><span><b>1 · Measure only</b> · changes nothing, no admin needed</span><button class="copy" type="button">copy</button></div><pre><span class="p">PS&gt; </span><code>powershell -ExecutionPolicy Bypass -File .\NetTune.ps1</code></pre></div>
+        <div class="cmd"><div class="cmd-head"><span><b>2 · Dry run</b> · shows what would change</span><button class="copy" type="button">copy</button></div><pre><span class="p">PS&gt; </span><code>powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -WhatIf</code></pre></div>
+        <div class="cmd"><div class="cmd-head"><span><b>3 · Apply</b> · measure, back up, apply, measure again</span><button class="copy" type="button">copy</button></div><pre><span class="p">PS&gt; </span><code>powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply</code></pre></div>
+        <div class="cmd"><div class="cmd-head"><span><b>4 · Undo everything</b> · uses the latest backup</span><button class="copy" type="button">copy</button></div><pre><span class="p">PS&gt; </span><code>powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Revert</code></pre></div>
+        <p class="meta" style="margin-top:4px">More options: <code>-Dns Keep</code>, <code>-Services Epic,Valve</code>, <code>-ExtraTargets 1.2.3.4</code>, <code>-Count 100</code>. Full help: <code>Get-Help .\NetTune.ps1 -Full</code></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SERVERS -->
+  <section>
+    <div class="wrap">
+      <span class="kicker">Game servers</span>
+      <h2>Tested against the region closest to you.</h2>
+      <p class="sub">For each service NetTune quickly tries every region in parallel, keeps the closest one and only then measures it properly.</p>
+      <div class="chips">
+        <span class="chip">Epic Games<span>Fortnite beacons</span></span>
+        <span class="chip">Valve / Steam<span>SDR relays</span></span>
+        <span class="chip">Blizzard<span>Battle.net</span></span>
+        <span class="chip">Ubisoft<span>Azure + AWS</span></span>
+        <span class="chip">Microsoft / Xbox<span>15 Azure regions</span></span>
+        <span class="chip">Embark<span>Google Cloud</span></span>
+        <span class="chip">Your own server<span>-ExtraTargets</span></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section id="faq" style="padding-top:0">
+    <div class="wrap">
+      <span class="kicker">FAQ</span>
+      <h2>Questions.</h2>
+      <div class="faq">
+        <details><summary>Is it safe to run?</summary><p>Yes. Run the measure-only mode or <code>-WhatIf</code> first to see exactly what would change. Apply saves a backup of every original value before touching anything, and <code>-Mode Revert</code> restores it.</p></details>
+        <details><summary>Will it lower my ping to the game server?</summary><p>It removes the spikes and lag that come from your own PC and Wi-Fi. It cannot shorten the distance to the server or fix your ISP. The golden rule: if the ping to your router is high or spiky, the problem is local, and that is exactly what NetTune fixes.</p></details>
+        <details><summary>Why didn't the "after" test show the power-management change?</summary><p>"Allow the computer to turn off this device" only takes effect after a restart, so the after test can't include it yet. Restart the PC after Apply.</p></details>
+        <details><summary>The spikes came back after a driver update. Why?</summary><p>Driver updates (Windows Update, Lenovo Vantage and similar) can restore factory values. Just run <code>-Mode Apply</code> again.</p></details>
+        <details><summary>I get an execution policy error.</summary><p>Always launch it with <code>powershell -ExecutionPolicy Bypass -File ...</code> as in the examples. It is built for Windows PowerShell 5.1 and also runs on PowerShell 7.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL -->
+  <section class="final">
+    <div class="wrap">
+      <h2>Stop guessing. <span style="color:var(--red-hi)">Measure.</span></h2>
+      <p class="sub" style="margin-inline:auto">One free script, about two minutes, and you'll know whether the lag is your PC or the internet.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">Download NetTune.ps1</a>
+        <a class="btn btn-ghost" href="https://github.com/dmparede/NetTune#readme">Read the docs</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>NetTune · MIT license · made by <a href="https://github.com/dmparede">Diogo Arede</a></span>
+    <span><a href="https://github.com/dmparede/NetTune/issues">Report an issue</a> · <a href="https://github.com/dmparede/NetTune/releases">Releases</a></span>
+  </div>
+</footer>
+
+<script>
+  // copy buttons
+  document.querySelectorAll('.cmd').forEach(function (box) {
+    var btn = box.querySelector('.copy');
+    var code = box.querySelector('code').textContent;
+    btn.addEventListener('click', function () {
+      var done = function () { btn.textContent = 'copied'; btn.classList.add('done'); setTimeout(function () { btn.textContent = 'copy'; btn.classList.remove('done'); }, 1600); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code).then(done, function () { fallback(); done(); });
+      } else { fallback(); done(); }
+      function fallback() {
+        var ta = document.createElement('textarea'); ta.value = code; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+      }
+    });
+  });
+
+  // reveal on scroll
+  var items = document.querySelectorAll('.reveal');
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+    }, { threshold: 0.12 });
+    items.forEach(function (el) { io.observe(el); });
+  } else {
+    items.forEach(function (el) { el.classList.add('in'); });
+  }
+
+  // typed terminal (skipped when the user prefers reduced motion)
+  (function () {
+    var pre = document.getElementById('term');
+    if (!pre || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var lines = pre.innerHTML.split('\n');
+    pre.innerHTML = '';
+    var i = 0;
+    function next() {
+      if (i >= lines.length) return;
+      pre.innerHTML += (i ? '\n' : '') + lines[i];
+      i++;
+      setTimeout(next, i === 1 ? 600 : 260);
+    }
+    setTimeout(next, 300);
+  })();
+</script>
+</body>
+</html>
