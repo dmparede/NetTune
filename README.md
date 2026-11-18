@@ -52,6 +52,7 @@ powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Revert
 Outras opções:
 
 - `-Count 100`: mais pings por alvo (o padrão é 50).
+- `-Services Epic,Valve`: testa só alguns serviços de jogos (opções: `Epic`, `Valve`, `Blizzard`, `Ubisoft`, `Microsoft`, `Embark`; por defeito, todos).
 - `-ExtraTargets 1.2.3.4`: junta um servidor teu ao teste (o IP de outro jogo, por exemplo).
 - `-SkipTest`: aplica sem fazer os testes antes e depois.
 - `-BackupFile .\backups\backup-XXXX.json`: escolhe um backup específico para o Revert.
@@ -78,11 +79,12 @@ O `Set-NetAdapterPowerManagement` não tem nenhum parâmetro para esta opção, 
 
 No modo Test, o resumo no fim diz quantos ajustes faltam.
 
-**Teste de ligação.** Faz ping ao **router**, à **Cloudflare** e à **Google**, e aos servidores da **Epic** em França, Alemanha e Reino Unido. As linhas vão aparecendo à medida que cada alvo termina, com uma barra de progresso. Cada valor é pintado de **verde** (bom), **amarelo** (razoável) ou **vermelho** (mau). A coluna *Estado* dá o veredicto da linha: o pior dos valores.
+**Teste de ligação.** Mede o **router**, a **Cloudflare** e a **Google**, e um servidor de cada serviço de jogos (ver abaixo). As linhas vão aparecendo à medida que cada alvo termina, com uma barra de progresso. Cada valor é pintado de **verde** (bom), **amarelo** (razoável) ou **vermelho** (mau). A coluna *Estado* dá o veredicto da linha: o pior dos valores.
 
 | Coluna | O que é | Verde | Amarelo |
 |---|---|---|---|
-| Média | Ping médio | Router ≤ 5 ms · Cloudflare/Google ≤ 40 · Epic ≤ 60 | Router ≤ 15 · ≤ 80 · ≤ 100 |
+| Servidor | A região medida. Nos jogos, é a mais próxima de ti, escolhida automaticamente | | |
+| Média | Ping médio | Router ≤ 5 ms · Cloudflare/Google ≤ 40 · jogos ≤ 60 | Router ≤ 15 · ≤ 80 · ≤ 100 |
 | Máx | Pior ping | Até 30 ms acima do mínimo | Até 100 ms acima |
 | Jitter | O quanto o ping varia de um pacote para o outro | ≤ 5 ms | ≤ 15 ms |
 | Picos | Pings que ficaram 100 ms acima do mínimo | 0 | 1-2 |
@@ -93,6 +95,26 @@ Com poucos pings (por exemplo `-Count 5`), um único pacote perdido já dá 20% 
 **Antes vs depois** (no Apply). Mostra a média, o jitter e a perda com `▼` verde quando melhorou, `▲` vermelho quando piorou e `=` quando ficou igual.
 
 **A regra de ouro:** se o ping ao **router** está alto ou tem picos, o problema está no teu PC ou no Wi-Fi, não na operadora nem no jogo. O router está ao teu lado; 1-5 ms é o normal.
+
+## Servidores de jogos
+
+Para cada serviço, o script faz primeiro um teste rápido a todas as regiões (em paralelo), fica com a mais próxima de ti e só depois mede essa a sério. No Apply, o teste "depois" usa os mesmos servidores que o "antes", para a comparação ser justa.
+
+| Serviço | O que é medido | Regiões | Quão perto do jogo real |
+|---|---|---|---|
+| **Epic Games** | Beacons de ping oficiais do Fortnite | França, Alemanha, Reino Unido, EUA (Este, Centro, Oeste), Brasil | Os próprios servidores de ping do jogo |
+| **Valve / Steam** | Relays SDR da Valve (CS2, Dota 2, Deadlock…). A lista vem em direto da API da Steam, com uma lista interna de reserva | Todos os datacenters da Valve no mundo | É por estes relays que passa o tráfego do jogo |
+| **Blizzard** | Servidores Battle.net | Europa, EUA, Coreia | Infraestrutura da Blizzard (na Google Cloud) |
+| **Ubisoft** | Regiões Azure usadas pelo Rainbow Six, mais AWS (GameLift) | Azure Irlanda, Holanda, EUA ×4, Brasil · AWS Frankfurt, EUA Este | Os datacenters onde os servidores correm, não o servidor em si |
+| **Microsoft / Xbox** | Regiões Azure | 15 regiões, da Europa à Ásia e Austrália | Os datacenters, não o servidor em si |
+| **Embark** | The Finals / Arc Raiders correm na Google Cloud, mas a Embark não tem endpoints públicos de ping. Mede-se a região Google Cloud | Google Cloud Holanda, EUA, Coreia | Referência aproximada |
+
+Notas:
+
+- **`tcp` na coluna Servidor:** a Azure bloqueia o ping, por isso nesses servidores mede-se o tempo de ligação TCP (porta 443). O handshake TCP demora praticamente um ida-e-volta, por isso os números são comparáveis com o ping.
+- **É uma referência, não o ping exato do jogo.** O ping dentro do jogo depende do servidor concreto do jogo. Mas, se a região mais próxima já tem picos ou perda aqui, também vai ter no jogo.
+- **Riot (Valorant, LoL)** ficou de fora: os IPs públicos de ping deles já não respondem.
+- Para outro jogo, junta o IP do servidor com `-ExtraTargets`.
 
 ## Ficheiros
 

@@ -4,7 +4,8 @@
     NetTune - ajustes honestos de rede para jogar com ping estável (Windows 10/11).
 
 .DESCRIPTION
-    Mede a ligação (router, internet, servidores da Epic), aplica apenas ajustes com efeito real
+    Mede a ligação (router, internet e servidores de jogos: Epic, Valve, Blizzard, Ubisoft,
+    Microsoft, Embark, cada um na região mais próxima), aplica apenas ajustes com efeito real
     em latência/estabilidade e volta a medir para comparar. Antes de mudar qualquer coisa guarda
     um backup em JSON, para poderes desfazer tudo com -Mode Revert.
 
@@ -40,6 +41,10 @@
 
 .PARAMETER SkipTest
     No modo Apply, salta os testes antes/depois.
+
+.PARAMETER Services
+    Que serviços de jogos testar: Epic, Valve, Blizzard, Ubisoft, Microsoft, Embark. Por defeito, todos.
+    Para cada um, o script escolhe sozinho a região mais próxima.
 
 .PARAMETER Ascii
     Usa só caracteres ASCII no ecrã (para consolas antigas sem fonte Unicode).
@@ -77,13 +82,17 @@ param(
 
     [switch]$SkipTest,
 
+    # Sem ValidateSet de propósito: com "powershell -File" o "Epic,Valve" chega como um texto só.
+    # A lista é separada e validada mais abaixo.
+    [string[]]$Services = @('Epic', 'Valve', 'Blizzard', 'Ubisoft', 'Microsoft', 'Embark'),
+
     [switch]$Ascii
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$Version   = '1.3.0'
+$Version   = '1.4.0'
 $Root      = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $BackupDir = Join-Path $Root 'backups'
 $LogDir    = Join-Path $Root 'logs'
@@ -128,6 +137,84 @@ $NetClassKey    = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-1
 $PnPCapOff      = 24
 $script:RebootNeeded = $false
 $script:ChangeCount  = 0
+
+# ---------------------------------------------------------------- servidores de jogos
+# Para cada serviço, o teste mede rapidamente todas as regiões e fica com a mais próxima de ti.
+# Cada região: @(nome, host, método). icmp = ping normal; tcp = tempo de ligação TCP à porta 443
+# (para quem bloqueia o ping, como a Azure). O handshake TCP demora praticamente um ida-e-volta.
+
+function New-AzureRegions([string[]]$Names) {
+    $pt = @{
+        northeurope = 'Irlanda'; westeurope = 'Holanda'; francecentral = 'Paris'; uksouth = 'Londres'
+        germanywestcentral = 'Frankfurt'; spaincentral = 'Madrid'; swedencentral = 'Suécia'
+        eastus = 'EUA Este'; centralus = 'EUA Centro'; southcentralus = 'EUA Sul'; westus = 'EUA Oeste'
+        brazilsouth = 'Brasil'; japaneast = 'Japão'; koreacentral = 'Coreia'; southeastasia = 'Singapura'; australiaeast = 'Austrália'
+    }
+    foreach ($n in $Names) { , @("Azure $($pt[$n])", "s8$n.blob.core.windows.net", 'tcp') }
+}
+
+$GameServices = [ordered]@{
+    # Beacons de ping oficiais do Fortnite.
+    Epic = @{ Name = 'Epic Games'; Regions = @(
+        @('França', 'ping-fr.ds.on.epicgames.com', 'icmp'),
+        @('Alemanha', 'ping-de.ds.on.epicgames.com', 'icmp'),
+        @('Reino Unido', 'ping-gb.ds.on.epicgames.com', 'icmp'),
+        @('EUA Este', 'ping-va.ds.on.epicgames.com', 'icmp'),
+        @('EUA Centro', 'ping-oh.ds.on.epicgames.com', 'icmp'),
+        @('EUA Oeste', 'ping-or.ds.on.epicgames.com', 'icmp'),
+        @('Brasil', 'ping-br.ds.on.epicgames.com', 'icmp')) }
+
+    # Relays SDR da Valve (por onde passa o tráfego do CS2, Dota 2, Deadlock...).
+    # A lista vem em direto da API da Steam; esta é só a reserva se a API falhar.
+    Valve = @{ Name = 'Valve / Steam'; Dynamic = 'SteamSDR'; Regions = @(
+        @('Madrid', '155.133.246.34', 'icmp'),
+        @('Paris', '185.25.182.18', 'icmp'),
+        @('Frankfurt', '155.133.226.68', 'icmp'),
+        @('Amesterdão', '155.133.248.36', 'icmp'),
+        @('Londres', '162.254.196.66', 'icmp'),
+        @('Estocolmo', '162.254.198.41', 'icmp'),
+        @('Viena', '146.66.155.66', 'icmp'),
+        @('Varsóvia', '155.133.230.100', 'icmp'),
+        @('EUA Este', '162.254.192.88', 'icmp')) }
+
+    # Servidores Battle.net (estão na Google Cloud).
+    Blizzard = @{ Name = 'Blizzard'; Regions = @(
+        @('Europa', 'eu.actual.battle.net', 'icmp'),
+        @('EUA', 'us.actual.battle.net', 'icmp'),
+        @('Coreia', 'kr.actual.battle.net', 'icmp')) }
+
+    # Rainbow Six e outros: Azure (regiões da config do jogo) e AWS GameLift em algumas regiões.
+    Ubisoft = @{ Name = 'Ubisoft'; Regions = @(
+        (New-AzureRegions @('northeurope', 'westeurope', 'eastus', 'centralus', 'southcentralus', 'westus', 'brazilsouth')) +
+        @(@('AWS Frankfurt', 'dynamodb.eu-central-1.amazonaws.com', 'icmp'),
+          @('AWS EUA Este', 'dynamodb.us-east-1.amazonaws.com', 'icmp'))) }
+
+    # Xbox / jogos da Microsoft: Azure.
+    Microsoft = @{ Name = 'Microsoft / Xbox'; Regions = @(
+        New-AzureRegions @('northeurope', 'westeurope', 'francecentral', 'uksouth', 'germanywestcentral', 'spaincentral',
+                           'swedencentral', 'eastus', 'centralus', 'westus', 'brazilsouth', 'japaneast', 'koreacentral',
+                           'southeastasia', 'australiaeast')) }
+
+    # The Finals / Arc Raiders correm na Google Cloud, mas a Embark não tem endpoints públicos de ping.
+    # Referência: regiões Google Cloud onde há servidores públicos que respondem (os do Battle.net).
+    Embark = @{ Name = 'Embark'; Regions = @(
+        @('Google Cloud Holanda', 'eu.actual.battle.net', 'icmp'),
+        @('Google Cloud EUA', 'us.actual.battle.net', 'icmp'),
+        @('Google Cloud Coreia', 'kr.actual.battle.net', 'icmp')) }
+}
+$script:GameTargets = $null
+
+# Normalizar -Services: aceita "Epic,Valve", "epic valve" ou -Services Epic,Valve; nomes sem maiúsculas certas.
+$script:ArgError = $null
+$wantedServices = @($Services | ForEach-Object { $_ -split '[,;\s]+' } | Where-Object { $_ })
+$Services = @(foreach ($w in $wantedServices) {
+    $match = @($GameServices.Keys) | Where-Object { $_ -eq $w } | Select-Object -First 1
+    if ($match) { $match }
+    elseif (-not $script:ArgError) {
+        # Mostrado pelo tratamento de erros normal, depois do banner.
+        $script:ArgError = "Serviço desconhecido em -Services: '$w'. Opções: $(@($GameServices.Keys) -join ', ')"
+    }
+})
 
 # Placas que nunca tocamos (VPNs, virtuais, Bluetooth).
 $ExcludeAdapters = 'Bluetooth|Virtual|\bTAP\b|Tunnel|VPN|Wintun|WireGuard|Hyper-V|Loopback|Check Point|TunnelBear'
@@ -391,34 +478,176 @@ function Get-WorstGrade([string[]]$Grades) {
     return 'ok'
 }
 
-function Measure-Target([string]$Label, [string]$HostName, [int]$Pings, [string]$Kind, [int]$Index, [int]$Total) {
-    $empty = [pscustomobject]@{ Alvo = $Label; Host = $HostName; Tipo = $Kind; Min = $null; Media = $null; Max = $null; Jitter = $null; 'Picos>100' = $null; 'Perda%' = 100 }
+function New-Target([string]$Label, [string]$HostName, [string]$Kind, [string]$Method = 'icmp', [string]$Region = '') {
+    [pscustomobject]@{ Label = $Label; Host = $HostName; Kind = $Kind; Method = $Method; Region = $Region }
+}
 
-    # Resolver o nome uma vez só (senão cada ping faz uma consulta DNS e uma falha de DNS conta como perda).
-    $address = $HostName
+function Resolve-HostV4([string]$HostName) {
+    # Resolve o nome uma vez só (senão cada ping faz uma consulta DNS e uma falha de DNS conta como perda).
+    if (-not $HostName) { return $null }
     $parsed = $null
-    if (-not [Net.IPAddress]::TryParse($HostName, [ref]$parsed)) {
-        try {
-            $all = @([Net.Dns]::GetHostAddresses($HostName))
-            $v4 = $all | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
-            $address = if ($v4) { $v4.IPAddressToString } else { $all[0].IPAddressToString }
-        } catch {
-            return $empty
+    if ([Net.IPAddress]::TryParse($HostName, [ref]$parsed)) { return $HostName }
+    try {
+        $all = @([Net.Dns]::GetHostAddresses($HostName))
+        $v4 = $all | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
+        if ($v4) { return $v4.IPAddressToString }
+        if ($all.Count -gt 0) { return $all[0].IPAddressToString }
+    } catch { }
+    return $null
+}
+
+function Measure-TcpOnce([string]$Ip, [int]$Port = 443, [int]$TimeoutMs = 1000) {
+    # Tempo do handshake TCP (SYN -> SYN/ACK), em ms. $null se falhar ou passar do tempo.
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $task = $client.ConnectAsync($Ip, $Port)
+        if ($task.Wait($TimeoutMs) -and $client.Connected) { return $sw.Elapsed.TotalMilliseconds }
+        return $null
+    } catch {
+        return $null
+    } finally {
+        $client.Close()
+    }
+}
+
+function Get-SteamRelayRegions {
+    # Lista oficial de relays SDR da Valve (uma região por datacenter, no mundo todo).
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $json = Invoke-RestMethod -Uri 'https://api.steampowered.com/ISteamApps/GetSDRConfig/v1/?appid=730' -TimeoutSec 8 -UseBasicParsing
+        $list = foreach ($pop in $json.pops.PSObject.Properties) {
+            $v = $pop.Value
+            $relays = $v.PSObject.Properties['relays']
+            if (-not $relays -or -not $relays.Value) { continue }
+            $ip = @($relays.Value)[0].ipv4
+            if (-not $ip) { continue }
+            $desc = if ($v.PSObject.Properties['desc']) { [string]$v.desc } else { $pop.Name }
+            , @($desc, $ip, 'icmp')
+        }
+        if (@($list).Count -gt 0) { return @($list) }
+    } catch { }
+    return $null
+}
+
+function Select-GameTargets {
+    # Para cada serviço pedido, mede todas as regiões rapidamente e devolve um alvo com a mais próxima.
+    $cands = New-Object System.Collections.Generic.List[object]
+    foreach ($key in $GameServices.Keys) {
+        if ($Services -notcontains $key) { continue }
+        $svc = $GameServices[$key]
+        $regions = $svc.Regions
+        if ($svc.ContainsKey('Dynamic') -and $svc.Dynamic -eq 'SteamSDR') {
+            $live = Get-SteamRelayRegions
+            if ($live) { $regions = $live } else { Write-Warn2 'Steam: não consegui obter a lista de relays, a usar a lista interna.' }
+        }
+        foreach ($r in $regions) {
+            $cands.Add([pscustomobject]@{ Key = $key; Service = $svc.Name; Region = $r[0]; Host = $r[1]; Method = $r[2]; Ip = $null; Best = $null })
         }
     }
+    if ($cands.Count -eq 0) { return @() }
+    $activity = 'A escolher a região mais próxima de cada serviço'
+
+    # 1) Resolver todos os nomes em paralelo.
+    Write-Progress -Id 3 -Activity $activity -Status 'A resolver nomes (DNS)...' -PercentComplete 5
+    $dnsTasks = @{}
+    foreach ($c in $cands) {
+        $parsed = $null
+        if ([Net.IPAddress]::TryParse($c.Host, [ref]$parsed)) { $c.Ip = $c.Host }
+        elseif (-not $dnsTasks.ContainsKey($c.Host)) { $dnsTasks[$c.Host] = [Net.Dns]::GetHostAddressesAsync($c.Host) }
+    }
+    if ($dnsTasks.Count -gt 0) {
+        try { [void][Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($dnsTasks.Values), 5000) } catch { }
+    }
+    foreach ($c in $cands) {
+        if ($c.Ip) { continue }
+        $t = $dnsTasks[$c.Host]
+        if ($t -and $t.Status -eq 'RanToCompletion') {
+            $v4 = @($t.Result) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
+            if ($v4) { $c.Ip = $v4.IPAddressToString }
+        }
+    }
+
+    # 2) Medir cada IP único (vários serviços partilham regiões): melhor de 3 pings em paralelo,
+    #    ou melhor de 2 ligações TCP uma a uma (em paralelo o tempo TCP não seria exato).
+    $best = @{}
+    $icmpIps = @($cands | Where-Object { $_.Ip -and $_.Method -eq 'icmp' } | ForEach-Object { $_.Ip } | Select-Object -Unique)
+    $tcpIps  = @($cands | Where-Object { $_.Ip -and $_.Method -eq 'tcp' }  | ForEach-Object { $_.Ip } | Select-Object -Unique)
+
+    if ($icmpIps.Count -gt 0) {
+        for ($round = 1; $round -le 3; $round++) {
+            Write-Progress -Id 3 -Activity $activity -Status "Ping a $($icmpIps.Count) servidores (ronda $round/3)..." -PercentComplete (5 + 15 * $round)
+            $jobs = foreach ($ip in $icmpIps) {
+                $p = New-Object System.Net.NetworkInformation.Ping
+                [pscustomobject]@{ Ip = $ip; Ping = $p; Task = $p.SendPingAsync($ip, 1000) }
+            }
+            try { [void][Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($jobs | ForEach-Object { $_.Task }), 3000) } catch { }
+            foreach ($j in $jobs) {
+                if ($j.Task.Status -eq 'RanToCompletion' -and $j.Task.Result.Status -eq 'Success') {
+                    $ms = [double]$j.Task.Result.RoundtripTime
+                    if (-not $best.ContainsKey($j.Ip) -or $ms -lt $best[$j.Ip]) { $best[$j.Ip] = $ms }
+                }
+                $j.Ping.Dispose()
+            }
+        }
+    }
+
+    if ($tcpIps.Count -gt 0) {
+        [void](Measure-TcpOnce $tcpIps[0] 443 1000)   # aquecimento: a primeira ligação é sempre mais lenta
+        $done = 0
+        for ($round = 1; $round -le 2; $round++) {
+            foreach ($ip in $tcpIps) {
+                $done++
+                Write-Progress -Id 3 -Activity $activity -Status "Ligação TCP a $($tcpIps.Count) servidores (ronda $round/2)..." -PercentComplete (65 + [int](35 * $done / (2 * $tcpIps.Count)))
+                $ms = Measure-TcpOnce $ip 443 700
+                if ($null -ne $ms -and (-not $best.ContainsKey($ip) -or $ms -lt $best[$ip])) { $best[$ip] = $ms }
+            }
+        }
+    }
+    Write-Progress -Id 3 -Activity $activity -Completed
+
+    foreach ($c in $cands) { if ($c.Ip -and $best.ContainsKey($c.Ip)) { $c.Best = $best[$c.Ip] } }
+
+    # 3) Um alvo por serviço, pela ordem da lista.
+    foreach ($key in @($cands | ForEach-Object { $_.Key } | Select-Object -Unique)) {
+        $mine = @($cands | Where-Object { $_.Key -eq $key })
+        $winner = $mine | Where-Object { $null -ne $_.Best } | Sort-Object Best | Select-Object -First 1
+        if ($winner) {
+            New-Target $winner.Service $winner.Ip 'jogo' $winner.Method $winner.Region
+        } else {
+            New-Target $mine[0].Service '' 'jogo' 'icmp' 'nenhuma região respondeu'
+        }
+    }
+}
+
+function Measure-Target($Target, [int]$Pings, [int]$Index, [int]$Total) {
+    $Label = $Target.Label
+    $empty = [pscustomobject]@{ Alvo = $Label; Host = $Target.Host; Regiao = $Target.Region; Metodo = $Target.Method; Tipo = $Target.Kind
+                                Min = $null; Media = $null; Max = $null; Jitter = $null; 'Picos>100' = $null; 'Perda%' = 100 }
+
+    $address = Resolve-HostV4 $Target.Host
+    if (-not $address) { return $empty }
+    $useTcp = ($Target.Method -eq 'tcp')
 
     $ping = New-Object System.Net.NetworkInformation.Ping
     $rtts = New-Object System.Collections.Generic.List[double]
     $lost = 0
     try {
+        if ($useTcp) { [void](Measure-TcpOnce $address 443 1000) }   # aquecimento
         for ($i = 0; $i -lt $Pings; $i++) {
             $pct = [int](100 * (($Index - 1) * $Pings + $i) / ($Total * $Pings))
-            Write-Progress -Id 1 -Activity 'Teste de ligação' -Status ("{0}/{1}  {2}  ({3})   ping {4}/{5}" -f $Index, $Total, $Label, $address, ($i + 1), $Pings) -PercentComplete $pct
-            try {
-                $reply = $ping.Send($address, 1000)
-                if ($reply.Status -eq 'Success') { $rtts.Add([double]$reply.RoundtripTime) } else { $lost++ }
-            } catch {
-                $lost++
+            $where = if ($Target.Region) { $Target.Region } else { $address }
+            Write-Progress -Id 1 -Activity 'Teste de ligação' -Status ("{0}/{1}  {2}  ({3})   {4} {5}/{6}" -f $Index, $Total, $Label, $where, $(if ($useTcp) { 'tcp' } else { 'ping' }), ($i + 1), $Pings) -PercentComplete $pct
+            if ($useTcp) {
+                $ms = Measure-TcpOnce $address 443 1000
+                if ($null -ne $ms) { $rtts.Add([math]::Round($ms, 1)) } else { $lost++ }
+            } else {
+                try {
+                    $reply = $ping.Send($address, 1000)
+                    if ($reply.Status -eq 'Success') { $rtts.Add([double]$reply.RoundtripTime) } else { $lost++ }
+                } catch {
+                    $lost++
+                }
             }
             Start-Sleep -Milliseconds 200
         }
@@ -440,8 +669,10 @@ function Measure-Target([string]$Label, [string]$HostName, [int]$Pings, [string]
 
     [pscustomobject]@{
         Alvo        = $Label
-        Host        = $HostName
-        Tipo        = $Kind
+        Host        = $Target.Host
+        Regiao      = $Target.Region
+        Metodo      = $Target.Method
+        Tipo        = $Target.Kind
         Min         = [math]::Round($min, 0)
         Media       = [math]::Round($stats.Average, 1)
         Max         = [math]::Round($stats.Maximum, 0)
@@ -452,12 +683,12 @@ function Measure-Target([string]$Label, [string]$HostName, [int]$Pings, [string]
 }
 
 # Colunas da tabela de resultados: título, largura.
-$ResultCols = @(@('Alvo', 18), @('Min', 6), @('Média', 8), @('Máx', 7), @('Jitter', 8), @('Picos', 7), @('Perda', 8))
+$ResultCols = @(@('Alvo', 18), @('Servidor', 24), @('Min', 5), @('Média', 8), @('Máx', 7), @('Jitter', 8), @('Picos', 7), @('Perda', 8))
 
 function Write-ResultHeader {
     Write-Seg '  '
     foreach ($c in $ResultCols) {
-        if ($c[0] -eq 'Alvo') { Write-Seg $c[0].PadRight($c[1]) DarkGray } else { Write-Seg $c[0].PadLeft($c[1]) DarkGray }
+        if ($c[0] -in 'Alvo', 'Servidor') { Write-Seg $c[0].PadRight($c[1]) DarkGray } else { Write-Seg $c[0].PadLeft($c[1]) DarkGray }
     }
     Write-Host '    Estado' -ForegroundColor DarkGray
     $total = ($ResultCols | ForEach-Object { $_[1] } | Measure-Object -Sum).Sum + 16
@@ -466,9 +697,13 @@ function Write-ResultHeader {
 
 function Write-ResultRow($R) {
     Write-Seg ('  ' + (Format-Fit $R.Alvo 18)) White
+    $server = [string]$R.Regiao
+    if ($R.Metodo -eq 'tcp') { $server = "$server $($G.Dot) tcp" }
+    Write-Seg (Format-Fit $server 23) DarkGray
+    Write-Seg ' '
 
     if ($null -eq $R.Media) {
-        Write-Seg ('-'.PadLeft(6) + '-'.PadLeft(8) + '-'.PadLeft(7) + '-'.PadLeft(8) + '-'.PadLeft(7)) DarkGray
+        Write-Seg ('-'.PadLeft(5) + '-'.PadLeft(8) + '-'.PadLeft(7) + '-'.PadLeft(8) + '-'.PadLeft(7)) DarkGray
         Write-Seg '100%'.PadLeft(8) Red
         Write-Host "    $($G.Bad) sem resposta" -ForegroundColor Red
         return
@@ -482,7 +717,7 @@ function Write-ResultRow($R) {
     $gPicos = Get-Grade $R.'Picos>100' 0 2
     $gPerda = Get-Grade $R.'Perda%' 0 2
 
-    Write-Seg (Format-Num $R.Min).PadLeft(6) DarkGray
+    Write-Seg (Format-Num $R.Min).PadLeft(5) DarkGray
     Write-Seg (Format-Num $R.Media).PadLeft(8) $StateColor[$gMed]
     Write-Seg (Format-Num $R.Max).PadLeft(7) $StateColor[$gMax]
     Write-Seg (Format-Num $R.Jitter).PadLeft(8) $StateColor[$gJit]
@@ -500,16 +735,22 @@ function Invoke-NetTest([string]$Title) {
     Write-Title $Title
     $targets = New-Object System.Collections.Generic.List[object]
     $gw = Get-DefaultGateway
-    if ($gw) { $targets.Add(@('Router', $gw, 'router')) } else { Write-Warn2 'Não encontrei o router (gateway). Estás ligado a alguma rede?' }
-    $targets.Add(@('Cloudflare', '1.1.1.1', 'internet'))
-    $targets.Add(@('Google', '8.8.8.8', 'internet'))
-    $targets.Add(@('Epic França', 'ping-fr.ds.on.epicgames.com', 'jogo'))
-    $targets.Add(@('Epic Alemanha', 'ping-de.ds.on.epicgames.com', 'jogo'))
-    $targets.Add(@('Epic Reino Unido', 'ping-gb.ds.on.epicgames.com', 'jogo'))
-    foreach ($t in $ExtraTargets) { $targets.Add(@("Extra $t", $t, 'jogo')) }
+    if ($gw) { $targets.Add((New-Target 'Router' $gw 'router' 'icmp' $gw)) } else { Write-Warn2 'Não encontrei o router (gateway). Estás ligado a alguma rede?' }
+    $targets.Add((New-Target 'Cloudflare' '1.1.1.1' 'internet' 'icmp' '1.1.1.1'))
+    $targets.Add((New-Target 'Google' '8.8.8.8' 'internet' 'icmp' '8.8.8.8'))
 
-    $secs = [math]::Ceiling($targets.Count * $Count * 0.2)
-    Write-Info "$($targets.Count) alvos $($G.Dot) $Count pings cada $($G.Dot) cerca de $secs s $($G.Dot) valores em ms"
+    # As regiões são escolhidas uma vez só: no Apply, o teste "depois" usa os mesmos servidores que o "antes".
+    if ($null -eq $script:GameTargets) {
+        if ($Services.Count -gt 0) {
+            Write-Info "A procurar a região mais próxima de cada serviço ($($Services.Count) serviços)..."
+        }
+        $script:GameTargets = @(Select-GameTargets)
+    }
+    foreach ($t in $script:GameTargets) { $targets.Add($t) }
+    foreach ($t in $ExtraTargets) { $targets.Add((New-Target 'Extra' $t 'jogo' 'icmp' $t)) }
+
+    $secs = [math]::Ceiling($targets.Count * $Count * 0.22)
+    Write-Info "$($targets.Count) alvos $($G.Dot) $Count medições cada $($G.Dot) cerca de $secs s $($G.Dot) valores em ms"
     Write-Info 'Não uses a net durante o teste (downloads, streams, jogos).'
     Write-Host ''
     Write-ResultHeader
@@ -519,7 +760,7 @@ function Invoke-NetTest([string]$Title) {
     try {
         foreach ($t in $targets) {
             $i++
-            $r = Measure-Target -Label $t[0] -HostName $t[1] -Pings $Count -Kind $t[2] -Index $i -Total $targets.Count
+            $r = Measure-Target -Target $t -Pings $Count -Index $i -Total $targets.Count
             Write-ResultRow $r
             $results += $r
         }
@@ -530,6 +771,12 @@ function Invoke-NetTest([string]$Title) {
     Write-Host ''
     Write-Seg '  ' ; Write-Seg 'verde' Green; Write-Seg ' = bom   ' DarkGray; Write-Seg 'amarelo' Yellow; Write-Seg ' = razoável   ' DarkGray
     Write-Seg 'vermelho' Red; Write-Host ' = mau' -ForegroundColor DarkGray
+    if ($script:GameTargets.Count -gt 0) {
+        Write-Host "  Servidor = a região mais próxima de ti, escolhida automaticamente." -ForegroundColor DarkGray
+    }
+    if (@($targets | Where-Object { $_.Method -eq 'tcp' }).Count -gt 0) {
+        Write-Host "  tcp = medido pelo tempo de ligação TCP (esses servidores bloqueiam o ping)." -ForegroundColor DarkGray
+    }
 
     $router = $results | Where-Object { $_.Tipo -eq 'router' } | Select-Object -First 1
     if ($router -and $null -ne $router.Media) {
@@ -1064,6 +1311,7 @@ $clock = [Diagnostics.Stopwatch]::StartNew()
 
 try {
     Write-Banner
+    if ($script:ArgError) { throw $script:ArgError }
     switch ($Mode) {
         'Test' {
             $pending = Show-AdapterState
