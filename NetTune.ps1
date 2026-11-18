@@ -13,6 +13,7 @@
 
     O que o modo Apply muda, em cada placa de rede fisica (Wi-Fi e Ethernet, incluindo USB):
       - "Permitir que o computador desligue este dispositivo" -> desligado
+        (PnPCapabilities = 24 na chave da placa; precisa de REINICIAR O PC para fazer efeito)
       - Poupanca de energia da placa Wi-Fi (Power Saving) -> desligada
       - Agressividade de roaming -> a mais baixa / desativada
       - Energy-Efficient Ethernet / Green Ethernet -> desligado
@@ -77,7 +78,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$Version   = '1.1.0'
+$Version   = '1.2.0'
 $Root      = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $BackupDir = Join-Path $Root 'backups'
 $LogDir    = Join-Path $Root 'logs'
@@ -115,6 +116,12 @@ $Rules = @(
 $WifiPowerSub   = '19cbb8fa-5279-450e-9fac-8a3d5fedd0c1'
 $WifiPowerSet   = '12bbebe6-58d6-4636-95bb-3217ef867c1a'
 $WifiPowerNames = @('Desempenho maximo', 'Poupanca baixa', 'Poupanca media', 'Poupanca maxima')
+
+# "Permitir que o computador desligue este dispositivo para poupar energia" vive no valor PnPCapabilities
+# da chave da placa (classe de rede). 24 (0x18) = desligado. So faz efeito depois de reiniciar o PC.
+$NetClassKey    = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}'
+$PnPCapOff      = 24
+$script:RebootNeeded = $false
 
 # Placas que nunca tocamos (VPNs, virtuais, Bluetooth).
 $ExcludeAdapters = 'Bluetooth|Virtual|\bTAP\b|Tunnel|VPN|Wintun|WireGuard|Hyper-V|Loopback|Check Point|TunnelBear'
@@ -200,6 +207,30 @@ function Set-WifiPowerPlan([string]$Scheme, [int]$AC, [int]$DC) {
 function Format-WifiPower([int]$Value) {
     if ($Value -ge 0 -and $Value -lt $WifiPowerNames.Count) { return "$Value ($($WifiPowerNames[$Value]))" }
     return [string]$Value
+}
+
+function Get-AdapterClassKey([string]$InterfaceGuid) {
+    # A subchave 00XX da classe de rede cujo NetCfgInstanceId e o InterfaceGuid da placa.
+    Get-ChildItem -Path $NetClassKey -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSChildName -match '^\d{4}$' } |
+        Where-Object {
+            $id = Get-ItemProperty -Path $_.PSPath -Name NetCfgInstanceId -ErrorAction SilentlyContinue
+            $id -and ([string]$id.NetCfgInstanceId -eq $InterfaceGuid)
+        } |
+        Select-Object -First 1
+}
+
+function Get-PnPCapabilities([string]$KeyPath) {
+    # Devolve o valor (int) ou $null se a entrada nao existir.
+    $prop = (Get-ItemProperty -Path $KeyPath -ErrorAction Stop).PSObject.Properties['PnPCapabilities']
+    if ($prop) { return [int]$prop.Value }
+    return $null
+}
+
+function Format-PnPCap($Value) {
+    if ($null -eq $Value) { return 'nao existe (Windows pode desligar a placa)' }
+    if ($Value -eq $PnPCapOff) { return "$Value (Windows NAO desliga a placa)" }
+    return "$Value"
 }
 
 # ---------------------------------------------------------------- testes
@@ -331,10 +362,12 @@ function Show-AdapterState {
         Write-Host ("  {0}  [{1}]  {2}" -f $a.Name, $a.Status, $a.InterfaceDescription) -ForegroundColor White
         Write-Info ("Driver {0} ({1})  Velocidade: {2}" -f $a.DriverVersion, $a.DriverDate, $a.LinkSpeed)
 
-        try {
-            $pm = Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction Stop
-            Write-Info ("Permitir desligar para poupar energia: {0}" -f $pm.AllowComputerToTurnOffDevice)
-        } catch { }
+        $classKey = Get-AdapterClassKey ([string]$a.InterfaceGuid)
+        if ($classKey) {
+            try {
+                Write-Info ("PnPCapabilities (chave {0}): {1}" -f $classKey.PSChildName, (Format-PnPCap (Get-PnPCapabilities $classKey.PSPath)))
+            } catch { }
+        }
 
         try {
             $rsc = Get-NetAdapterRsc -Name $a.Name -ErrorAction Stop
@@ -426,7 +459,7 @@ function Invoke-Apply {
             Name                 = $a.Name
             InterfaceDescription = $a.InterfaceDescription
             InterfaceGuid        = [string]$a.InterfaceGuid
-            PowerManagement      = $null
+            PnPCapabilities      = $null
             Rsc                  = $null
             Advanced             = @()
             Dns                  = $null
@@ -436,39 +469,43 @@ function Invoke-Apply {
         $changed = $false
 
         # 1) Deixar o Windows desligar a placa para poupar energia
-        $pm = $null
-        try {
-            $pm = Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction Stop
-        } catch {
-            Write-Info "Gestao de energia: nao suportada ou ilegivel nesta placa ($($_.Exception.Message.Trim()))"
-        }
-        if ($pm) {
-            $current = [string]$pm.AllowComputerToTurnOffDevice
-            if ($current -eq 'Enabled') {
-                $entry.PowerManagement = $current
-                if ($PSCmdlet.ShouldProcess($a.Name, 'Desligar "permitir que o computador desligue este dispositivo"')) {
+        #    -> PnPCapabilities = 24 na chave da placa (so faz efeito depois de reiniciar o PC)
+        $classKey = Get-AdapterClassKey ([string]$a.InterfaceGuid)
+        if (-not $classKey) {
+            Write-Warn2 "Gestao de energia: nao encontrei a chave da placa no registo (NetCfgInstanceId = $($a.InterfaceGuid))"
+        } else {
+            $old = $null
+            $readOk = $true
+            try { $old = Get-PnPCapabilities $classKey.PSPath } catch {
+                $readOk = $false
+                Write-Warn2 "Gestao de energia: nao consegui ler PnPCapabilities: $($_.Exception.Message)"
+            }
+            if ($readOk -and $old -eq $PnPCapOff) {
+                Write-Info "Gestao de energia do Windows: ja desligada (PnPCapabilities = $PnPCapOff)"
+            } elseif ($readOk) {
+                $existed = ($null -ne $old)
+                $entry.PnPCapabilities = [ordered]@{ ClassKey = $classKey.PSChildName; Existed = $existed; Value = $old }
+                $oldText = if ($existed) { [string]$old } else { 'nao existia' }
+                $msg = "PnPCapabilities (chave $($classKey.PSChildName)): $oldText -> $PnPCapOff"
+                if ($PSCmdlet.ShouldProcess($a.Name, $msg)) {
                     try {
-                        Set-NetAdapterPowerManagement -Name $a.Name -AllowComputerToTurnOffDevice Disabled -NoRestart -ErrorAction Stop
-                        $changed = $true
+                        New-ItemProperty -Path $classKey.PSPath -Name PnPCapabilities -PropertyType DWord -Value $PnPCapOff -Force -ErrorAction Stop | Out-Null
                     } catch {
-                        Write-Warn2 "Gestao de energia do Windows: falhou ao desligar: $($_.Exception.Message)"
+                        Write-Warn2 "Gestao de energia do Windows: falhou ao escrever PnPCapabilities: $($_.Exception.Message)"
                     }
 
-                    # Confirmar lendo outra vez: so dizemos OK se ficou mesmo Disabled.
+                    # Confirmar lendo outra vez: so dizemos OK se ficou mesmo 24.
                     $now = $null
-                    try {
-                        $now = [string](Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction Stop).AllowComputerToTurnOffDevice
-                    } catch {
+                    try { $now = Get-PnPCapabilities $classKey.PSPath } catch {
                         Write-Warn2 "Gestao de energia do Windows: nao consegui confirmar o valor: $($_.Exception.Message)"
                     }
-                    if ($now -eq 'Disabled') {
-                        Write-Ok 'Gestao de energia do Windows desligada'
-                    } elseif ($now) {
-                        Write-Warn2 "Gestao de energia do Windows: continua '$now' (esperado 'Disabled')"
+                    if ($now -eq $PnPCapOff) {
+                        Write-Ok "Gestao de energia do Windows desligada ($msg, falta reiniciar o PC)"
+                        $script:RebootNeeded = $true
+                    } else {
+                        Write-Warn2 "Gestao de energia do Windows: PnPCapabilities ficou '$(Format-PnPCap $now)' (esperado $PnPCapOff)"
                     }
                 }
-            } else {
-                Write-Info "Gestao de energia do Windows: $current (nada a fazer)"
             }
         }
 
@@ -568,6 +605,10 @@ function Invoke-Apply {
     Write-Host ''
     Write-Ok 'Feito. Para desfazer: .\NetTune.ps1 -Mode Revert'
     Write-Info 'Nota: um update do driver da placa pode repor os valores de fabrica. Se os picos voltarem, corre o Apply outra vez.'
+    if ($script:RebootNeeded) {
+        Write-Host ''
+        Write-Warn2 'REINICIA O PC para a gestao de energia (PnPCapabilities) fazer efeito. O teste "depois" acima ainda nao inclui essa mudanca.'
+    }
 }
 
 # ---------------------------------------------------------------- revert
@@ -633,13 +674,27 @@ function Invoke-Revert {
             }
         }
 
-        if ($e.PowerManagement -eq 'Enabled') {
-            if ($PSCmdlet.ShouldProcess($a.Name, 'Repor gestao de energia do Windows')) {
-                try {
-                    Set-NetAdapterPowerManagement -Name $a.Name -AllowComputerToTurnOffDevice Enabled -NoRestart -ErrorAction Stop
-                    Write-Ok 'Gestao de energia do Windows reposta'
-                    $changed = $true
-                } catch { Write-Warn2 "Gestao de energia: $($_.Exception.Message)" }
+        # Gestao de energia: PnPCapabilities. Backups antigos (PowerManagement) sao ignorados de proposito:
+        # essa versao nunca conseguiu mudar nada (o Set-NetAdapterPowerManagement nao tem esse parametro).
+        $pnpProp = $e.PSObject.Properties['PnPCapabilities']
+        if ($pnpProp -and $pnpProp.Value) {
+            $pc = $pnpProp.Value
+            $classKey = Get-AdapterClassKey ([string]$a.InterfaceGuid)
+            if (-not $classKey) {
+                Write-Warn2 "Gestao de energia: nao encontrei a chave da placa no registo (era a $($pc.ClassKey))"
+            } else {
+                $desc = if ($pc.Existed) { "PnPCapabilities (chave $($classKey.PSChildName)) -> $($pc.Value)" } else { "PnPCapabilities (chave $($classKey.PSChildName)) -> apagar (nao existia)" }
+                if ($PSCmdlet.ShouldProcess($a.Name, $desc)) {
+                    try {
+                        if ($pc.Existed) {
+                            New-ItemProperty -Path $classKey.PSPath -Name PnPCapabilities -PropertyType DWord -Value ([int]$pc.Value) -Force -ErrorAction Stop | Out-Null
+                        } elseif ($null -ne (Get-PnPCapabilities $classKey.PSPath)) {
+                            Remove-ItemProperty -Path $classKey.PSPath -Name PnPCapabilities -ErrorAction Stop
+                        }
+                        Write-Ok $desc
+                        $script:RebootNeeded = $true
+                    } catch { Write-Warn2 "Gestao de energia: $($_.Exception.Message)" }
+                }
             }
         }
 
@@ -670,6 +725,9 @@ function Invoke-Revert {
     if (-not $WhatIfPreference) { [void](Wait-Network 40) }
     Write-Host ''
     Write-Ok 'Backup reposto.'
+    if ($script:RebootNeeded) {
+        Write-Warn2 'REINICIA O PC para a gestao de energia (PnPCapabilities) voltar ao valor original.'
+    }
 }
 
 # ---------------------------------------------------------------- main

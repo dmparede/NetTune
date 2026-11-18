@@ -11,7 +11,7 @@ Em cada placa de rede física (Wi-Fi, Ethernet e adaptadores USB):
 | Ajuste | Porquê |
 |---|---|
 | Plano de energia → "Adaptador sem fios: modo de poupança de energia" → Desempenho máximo | Por defeito, na bateria o Windows põe o Wi-Fi em poupança média. Jogar sem carregador dá picos. |
-| "Permitir que o computador desligue este dispositivo" → desligado | O Windows deixa de pôr a placa a dormir. |
+| "Permitir que o computador desligue este dispositivo" → desligado | O Windows deixa de pôr a placa a dormir. É feito com `PnPCapabilities = 24` na chave de registo da placa e **só faz efeito depois de reiniciar o PC**. |
 | Poupança de energia da placa (Power Saving) → desligada | A placa adormece entre pacotes e demora a acordar, o que dá picos. |
 | Agressividade de roaming → a mais baixa | A placa deixa de procurar outros pontos de acesso a meio do jogo (cada procura congela a ligação). |
 | Energy-Efficient Ethernet / Green Ethernet → desligado | Mesmo problema, mas no cabo. |
@@ -58,6 +58,16 @@ Outras opções:
 
 Durante o Apply, a ligação cai uns segundos enquanto as placas reiniciam.
 
+**Reinicia o PC depois do Apply (e do Revert).** A opção "permitir que o computador desligue este dispositivo" só muda depois de reiniciar, por isso o teste "depois" que o script faz ainda não a inclui. O script avisa no fim quando é preciso reiniciar.
+
+### Como funciona a gestão de energia
+
+O `Set-NetAdapterPowerManagement` não tem nenhum parâmetro para esta opção, por isso o script escreve diretamente no registo. É a mesma coisa que tirar o visto na caixa do Gestor de Dispositivos:
+
+- Chave: `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}\00XX`, a subchave cujo `NetCfgInstanceId` é o GUID da placa.
+- Valor: `PnPCapabilities` (DWORD) = `24`.
+- O backup guarda o valor antigo, ou que não existia. O Revert repõe esse valor ou apaga a entrada.
+
 ## Como ler o teste
 
 O teste faz ping ao **router**, à **Cloudflare** e à **Google**, e aos servidores da **Epic** em França, Alemanha e Reino Unido.
@@ -74,7 +84,7 @@ O teste faz ping ao **router**, à **Cloudflare** e à **Google**, e aos servido
 
 ## Ficheiros
 
-- `backups/backup-<data>.json`: o estado original de cada opção alterada.
+- `backups/backup-<data>.json`: o estado original de cada opção alterada (incluindo o `PnPCapabilities` antigo de cada placa e o plano de energia do Wi-Fi).
 - `logs/nettune-<modo>-<data>.log`: o registo completo de cada execução.
 
 As duas pastas estão no `.gitignore`, porque são específicas de cada PC.
