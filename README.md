@@ -55,6 +55,7 @@ Outras opções:
 - `-ExtraTargets 1.2.3.4`: junta um servidor teu ao teste (o IP de outro jogo, por exemplo).
 - `-SkipTest`: aplica sem fazer os testes antes e depois.
 - `-BackupFile .\backups\backup-XXXX.json`: escolhe um backup específico para o Revert.
+- `-Ascii`: usa só caracteres ASCII no ecrã, se a tua consola mostrar quadrados em vez de `✓ ─ ╭`. No Windows Terminal (o padrão do Windows 11) não é preciso.
 
 Durante o Apply, a ligação cai uns segundos enquanto as placas reiniciam.
 
@@ -68,17 +69,28 @@ O `Set-NetAdapterPowerManagement` não tem nenhum parâmetro para esta opção, 
 - Valor: `PnPCapabilities` (DWORD) = `24`.
 - O backup guarda o valor antigo, ou que não existia. O Revert repõe esse valor ou apaga a entrada.
 
-## Como ler o teste
+## Como ler o ecrã
 
-O teste faz ping ao **router**, à **Cloudflare** e à **Google**, e aos servidores da **Epic** em França, Alemanha e Reino Unido.
+**Estado atual.** Cada placa aparece com as suas opções:
 
-| Coluna | O que é | Bom |
-|---|---|---|
-| Media | Ping médio | Router: 1-5 ms |
-| Max | Pior ping | Perto da média |
-| Jitter | O quanto o ping varia de um pacote para o outro | < 5 ms |
-| Picos>100 | Pings que ficaram 100 ms acima do mínimo | 0 |
-| Perda% | Pacotes perdidos | 0 |
+- `✓` verde: já está otimizado.
+- `!` amarelo: o Apply vai mudar isto (o valor novo aparece a seguir à `→`).
+
+No modo Test, o resumo no fim diz quantos ajustes faltam.
+
+**Teste de ligação.** Faz ping ao **router**, à **Cloudflare** e à **Google**, e aos servidores da **Epic** em França, Alemanha e Reino Unido. As linhas vão aparecendo à medida que cada alvo termina, com uma barra de progresso. Cada valor é pintado de **verde** (bom), **amarelo** (razoável) ou **vermelho** (mau). A coluna *Estado* dá o veredicto da linha: o pior dos valores.
+
+| Coluna | O que é | Verde | Amarelo |
+|---|---|---|---|
+| Média | Ping médio | Router ≤ 5 ms · Cloudflare/Google ≤ 40 · Epic ≤ 60 | Router ≤ 15 · ≤ 80 · ≤ 100 |
+| Máx | Pior ping | Até 30 ms acima do mínimo | Até 100 ms acima |
+| Jitter | O quanto o ping varia de um pacote para o outro | ≤ 5 ms | ≤ 15 ms |
+| Picos | Pings que ficaram 100 ms acima do mínimo | 0 | 1-2 |
+| Perda | Pacotes perdidos | 0% | ≤ 2% |
+
+Com poucos pings (por exemplo `-Count 5`), um único pacote perdido já dá 20% e a linha fica vermelha. Para um diagnóstico a sério usa o padrão de 50.
+
+**Antes vs depois** (no Apply). Mostra a média, o jitter e a perda com `▼` verde quando melhorou, `▲` vermelho quando piorou e `=` quando ficou igual.
 
 **A regra de ouro:** se o ping ao **router** está alto ou tem picos, o problema está no teu PC ou no Wi-Fi, não na operadora nem no jogo. O router está ao teu lado; 1-5 ms é o normal.
 
