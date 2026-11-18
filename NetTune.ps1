@@ -1,73 +1,74 @@
-﻿#Requires -Version 5.1
-<#
+﻿<#
 .SYNOPSIS
-    NetTune - ajustes honestos de rede para jogar com ping estável (Windows 10/11).
+    NetTune - honest network tweaks for a stable gaming ping (Windows 10/11).
 
 .DESCRIPTION
-    Mede a ligação (router, internet e servidores de jogos: Epic, Valve, Blizzard, Ubisoft,
-    Microsoft, Embark, cada um na região mais próxima), aplica apenas ajustes com efeito real
-    em latência/estabilidade e volta a medir para comparar. Antes de mudar qualquer coisa guarda
-    um backup em JSON, para poderes desfazer tudo com -Mode Revert.
+    Measures the connection (router, internet and game servers: Epic, Valve, Blizzard, Ubisoft,
+    Microsoft, Embark, each in its closest region), applies only tweaks with a real effect on
+    latency/stability and measures again to compare. Before changing anything it saves a JSON
+    backup, so you can undo everything with -Mode Revert.
 
-    No plano de energia ativo do Windows:
-      - "Definições do adaptador sem fios > Modo de poupança de energia" -> Desempenho máximo (corrente e bateria)
+    In the active Windows power plan:
+      - "Wireless Adapter Settings > Power Saving Mode" -> Maximum performance (plugged in and on battery)
 
-    O que o modo Apply muda, em cada placa de rede física (Wi-Fi e Ethernet, incluindo USB):
-      - "Permitir que o computador desligue este dispositivo" -> desligado
-        (PnPCapabilities = 24 na chave da placa; precisa de REINICIAR O PC para fazer efeito)
-      - Poupança de energia da placa Wi-Fi (Power Saving) -> desligada
-      - Agressividade de roaming -> a mais baixa / desativada
-      - Energy-Efficient Ethernet / Green Ethernet -> desligado
-      - Suspensão seletiva USB do adaptador -> desligada
-      - RSC (Receive Segment Coalescing) -> desligado
-      - DNS -> testa o atual contra Cloudflare, Google, Quad9 e OpenDNS e aplica o mais rápido,
-        só se for claramente melhor (o DNS NÃO muda o ping nos jogos, só a rapidez a abrir nomes)
+    What Apply mode changes on each physical network adapter (Wi-Fi and Ethernet, including USB):
+      - "Allow the computer to turn off this device" -> off
+        (PnPCapabilities = 24 in the adapter's registry key; needs a PC RESTART to take effect)
+      - Wi-Fi adapter power saving (Power Saving) -> off
+      - Roaming aggressiveness -> lowest / disabled
+      - Energy-Efficient Ethernet / Green Ethernet -> off
+      - USB selective suspend of the adapter -> off
+      - RSC (Receive Segment Coalescing) -> off
+      - DNS -> tests the current one against Cloudflare, Google, Quad9 and OpenDNS and applies the
+        fastest, only if it is clearly better (DNS does NOT change in-game ping, only how fast names resolve)
 
 .PARAMETER Mode
-    Test   : só mede e mostra o estado das placas (não precisa de admin, não muda nada). Padrão.
-    Apply  : mede, faz backup, aplica os ajustes, volta a medir e compara. Precisa de admin.
-    Revert : repõe o último backup (ou o indicado em -BackupFile). Precisa de admin.
+    Test   : only measures and shows the adapter state (no admin needed, changes nothing). Default.
+    Apply  : measures, backs up, applies the tweaks, measures again and compares. Needs admin.
+    Revert : restores the latest backup (or the one given in -BackupFile). Needs admin.
 
 .PARAMETER Dns
-    Auto (padrão): testa o DNS atual contra Cloudflare, Google, Quad9 e OpenDNS e, no Apply, muda para
-    o mais rápido se ganhar pelo menos 3 ms e 15%. Keep: não testa nem mexe no DNS.
-    Cloudflare, Google, Quad9 ou OpenDNS: força esse DNS no Apply, sem testar.
+    Auto (default): tests the current DNS against Cloudflare, Google, Quad9 and OpenDNS and, in Apply,
+    switches to the best one when it clearly wins. Keep: does not test or touch DNS.
+    Cloudflare, Google, Quad9 or OpenDNS: forces that DNS in Apply, after checking it responds.
 
 .PARAMETER Count
-    Número de pings por alvo nos testes (padrão 50, cerca de 10 s por alvo).
+    Number of pings per target in the tests (default 50, about 10 s per target).
 
 .PARAMETER ExtraTargets
-    Alvos extra para o teste, por exemplo o IP de um servidor de outro jogo.
+    Extra test targets, for example the IP of another game's server.
 
 .PARAMETER BackupFile
-    Ficheiro de backup a usar no modo Revert. Por defeito usa o mais recente da pasta backups.
+    Backup file to use in Revert mode. By default the most recent one in the backups folder.
 
 .PARAMETER SkipTest
-    No modo Apply, salta os testes antes/depois.
+    In Apply mode, skips the before/after tests.
 
 .PARAMETER Services
-    Que serviços de jogos testar: Epic, Valve, Blizzard, Ubisoft, Microsoft, Embark. Por defeito, todos.
-    Para cada um, o script escolhe sozinho a região mais próxima.
+    Which game services to test: Epic, Valve, Blizzard, Ubisoft, Microsoft, Embark. All by default.
+    For each one, the script picks the closest region by itself.
 
 .PARAMETER Ascii
-    Usa só caracteres ASCII no ecrã (para consolas antigas sem fonte Unicode).
+    Uses only ASCII characters on screen (for old consoles without a Unicode font).
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\NetTune.ps1
-    Mede a ligação e mostra o estado atual das placas.
+    Measures the connection and shows the current adapter state.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -WhatIf
-    Mostra o que seria mudado, sem mudar nada.
+    Shows what would be changed, without changing anything.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -Dns Cloudflare
-    Aplica os ajustes e define o DNS da Cloudflare.
+    Applies the tweaks and sets Cloudflare DNS.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Revert
-    Desfaz tudo usando o backup mais recente.
+    Undoes everything using the most recent backup.
 #>
+# #Requires has to come after the help block, otherwise Get-Help ignores the block.
+#Requires -Version 5.1
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [ValidateSet('Test', 'Apply', 'Revert')]
@@ -85,8 +86,8 @@ param(
 
     [switch]$SkipTest,
 
-    # Sem ValidateSet de propósito: com "powershell -File" o "Epic,Valve" chega como um texto só.
-    # A lista é separada e validada mais abaixo.
+    # No ValidateSet on purpose: with "powershell -File", "Epic,Valve" arrives as a single string.
+    # The list is split and validated further down.
     [string[]]$Services = @('Epic', 'Valve', 'Blizzard', 'Ubisoft', 'Microsoft', 'Embark'),
 
     [switch]$Ascii
@@ -108,126 +109,126 @@ $DnsPresets = @{
     OpenDNS    = @('208.67.222.222', '208.67.220.220', '2620:119:35::35', '2620:119:53::53')
 }
 
-# Domínios do teste de DNS (o que usas a jogar: lojas, launchers, chat, streams).
+# DNS test domains (what you use while gaming: stores, launchers, chat, streams).
 $DnsTestDomains = @('google.com', 'youtube.com', 'epicgames.com', 'steampowered.com', 'battle.net',
                     'ubisoft.com', 'xboxlive.com', 'discord.com', 'twitch.tv', 'microsoft.com')
 
-# Regras para as propriedades avançadas das placas.
-# Display: regex contra o nome da propriedade (EN / PT / ES, porque o driver usa a língua do Windows).
-# Want   : regex contra os valores válidos; escolhe o primeiro que bater.
-# "Desligado" em EN / PT-BR / PT-PT / ES (Disabled, Desabilitado, Desativado, Desactivado, Deshabilitado...).
+# Rules for the adapters' advanced properties.
+# Display: regex against the property name (EN / PT / ES, because the driver uses the Windows language).
+# Want   : regex against the valid values; the first match wins.
+# "Off" in EN / PT-BR / PT-PT / ES (Disabled, Desabilitado, Desativado, Desactivado, Deshabilitado...).
 $OffValues = 'Disab|Desab|Deshab|Desact|Desativ|Deslig|^Off$'
 
 $Rules = @(
-    @{ Label = 'Poupança de energia da placa'
+    @{ Label = 'Adapter power saving'
        Display = '^(Power Saving|Power Save Mode|Power Saving Mode|Modo de economia de energia|Economia de energia|Poupança de energia|Modo de poupança de energia|Ahorro de energía|Modo de ahorro de energía)$'
        Want = $OffValues }
-    @{ Label = 'Agressividade de roaming'
+    @{ Label = 'Roaming aggressiveness'
        Display = 'Roaming Aggressiveness|Agressividade de roaming|Agresividad de itinerancia|Agresividad de roaming'
        Want = '^1\.|Lowest|Mais baix|Más baj|Disab|Desab|Deshab|Desact' }
     @{ Label = 'Energy-Efficient Ethernet'
        Display = 'Energy.Efficient Ethernet|Advanced EEE|^EEE$|Green Ethernet|Ethernet verde|Ethernet.*efici'
        Want = $OffValues }
-    @{ Label = 'Suspensão seletiva USB'
+    @{ Label = 'USB selective suspend'
        Display = 'Selective Suspend|Suspensão seletiva|Suspensión selectiva'
        Want = $OffValues }
 )
 
-# Plano de energia do Windows -> "Definições do adaptador sem fios" -> "Modo de poupança de energia".
-# 0 = Desempenho máximo, 1 = Poupança baixa, 2 = Poupança média, 3 = Poupança máxima.
+# Windows power plan -> "Wireless Adapter Settings" -> "Power Saving Mode".
+# 0 = Maximum performance, 1 = Low power saving, 2 = Medium power saving, 3 = Maximum power saving.
 $WifiPowerSub   = '19cbb8fa-5279-450e-9fac-8a3d5fedd0c1'
 $WifiPowerSet   = '12bbebe6-58d6-4636-95bb-3217ef867c1a'
-$WifiPowerNames = @('Desempenho máximo', 'Poupança baixa', 'Poupança média', 'Poupança máxima')
+$WifiPowerNames = @('Maximum performance', 'Low power saving', 'Medium power saving', 'Maximum power saving')
 
-# "Permitir que o computador desligue este dispositivo para poupar energia" vive no valor PnPCapabilities
-# da chave da placa (classe de rede). 24 (0x18) = desligado. Só faz efeito depois de reiniciar o PC.
+# "Allow the computer to turn off this device to save power" lives in the PnPCapabilities value
+# of the adapter's key (network class). 24 (0x18) = off. Only takes effect after a PC restart.
 $NetClassKey    = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}'
 $PnPCapOff      = 24
 $script:RebootNeeded = $false
 $script:ChangeCount  = 0
 
-# ---------------------------------------------------------------- servidores de jogos
-# Para cada serviço, o teste mede rapidamente todas as regiões e fica com a mais próxima de ti.
-# Cada região: @(nome, host, método). icmp = ping normal; tcp = tempo de ligação TCP à porta 443
-# (para quem bloqueia o ping, como a Azure). O handshake TCP demora praticamente um ida-e-volta.
+# ---------------------------------------------------------------- game servers
+# For each service, the test quickly measures every region and keeps the one closest to you.
+# Each region: @(name, host, method). icmp = normal ping; tcp = TCP connect time to port 443
+# (for providers that block ping, like Azure). A TCP handshake takes almost exactly one round trip.
 
 function New-AzureRegions([string[]]$Names) {
     $pt = @{
-        northeurope = 'Irlanda'; westeurope = 'Holanda'; francecentral = 'Paris'; uksouth = 'Londres'
-        germanywestcentral = 'Frankfurt'; spaincentral = 'Madrid'; swedencentral = 'Suécia'
-        eastus = 'EUA Este'; centralus = 'EUA Centro'; southcentralus = 'EUA Sul'; westus = 'EUA Oeste'
-        brazilsouth = 'Brasil'; japaneast = 'Japão'; koreacentral = 'Coreia'; southeastasia = 'Singapura'; australiaeast = 'Austrália'
+        northeurope = 'Ireland'; westeurope = 'Netherlands'; francecentral = 'Paris'; uksouth = 'London'
+        germanywestcentral = 'Frankfurt'; spaincentral = 'Madrid'; swedencentral = 'Sweden'
+        eastus = 'US East'; centralus = 'US Central'; southcentralus = 'US South'; westus = 'US West'
+        brazilsouth = 'Brazil'; japaneast = 'Japan'; koreacentral = 'Korea'; southeastasia = 'Singapore'; australiaeast = 'Australia'
     }
     foreach ($n in $Names) { , @("Azure $($pt[$n])", "s8$n.blob.core.windows.net", 'tcp') }
 }
 
 $GameServices = [ordered]@{
-    # Beacons de ping oficiais do Fortnite.
+    # Official Fortnite ping beacons.
     Epic = @{ Name = 'Epic Games'; Regions = @(
-        @('França', 'ping-fr.ds.on.epicgames.com', 'icmp'),
-        @('Alemanha', 'ping-de.ds.on.epicgames.com', 'icmp'),
-        @('Reino Unido', 'ping-gb.ds.on.epicgames.com', 'icmp'),
-        @('EUA Este', 'ping-va.ds.on.epicgames.com', 'icmp'),
-        @('EUA Centro', 'ping-oh.ds.on.epicgames.com', 'icmp'),
-        @('EUA Oeste', 'ping-or.ds.on.epicgames.com', 'icmp'),
-        @('Brasil', 'ping-br.ds.on.epicgames.com', 'icmp')) }
+        @('France', 'ping-fr.ds.on.epicgames.com', 'icmp'),
+        @('Germany', 'ping-de.ds.on.epicgames.com', 'icmp'),
+        @('United Kingdom', 'ping-gb.ds.on.epicgames.com', 'icmp'),
+        @('US East', 'ping-va.ds.on.epicgames.com', 'icmp'),
+        @('US Central', 'ping-oh.ds.on.epicgames.com', 'icmp'),
+        @('US West', 'ping-or.ds.on.epicgames.com', 'icmp'),
+        @('Brazil', 'ping-br.ds.on.epicgames.com', 'icmp')) }
 
-    # Relays SDR da Valve (por onde passa o tráfego do CS2, Dota 2, Deadlock...).
-    # A lista vem em direto da API da Steam; esta é só a reserva se a API falhar.
+    # Valve SDR relays (CS2, Dota 2, Deadlock... traffic goes through them).
+    # The list comes live from the Steam API; this one is only the fallback if the API fails.
     Valve = @{ Name = 'Valve / Steam'; Dynamic = 'SteamSDR'; Regions = @(
         @('Madrid', '155.133.246.34', 'icmp'),
         @('Paris', '185.25.182.18', 'icmp'),
         @('Frankfurt', '155.133.226.68', 'icmp'),
-        @('Amesterdão', '155.133.248.36', 'icmp'),
-        @('Londres', '162.254.196.66', 'icmp'),
-        @('Estocolmo', '162.254.198.41', 'icmp'),
-        @('Viena', '146.66.155.66', 'icmp'),
-        @('Varsóvia', '155.133.230.100', 'icmp'),
-        @('EUA Este', '162.254.192.88', 'icmp')) }
+        @('Amsterdam', '155.133.248.36', 'icmp'),
+        @('London', '162.254.196.66', 'icmp'),
+        @('Stockholm', '162.254.198.41', 'icmp'),
+        @('Vienna', '146.66.155.66', 'icmp'),
+        @('Warsaw', '155.133.230.100', 'icmp'),
+        @('US East', '162.254.192.88', 'icmp')) }
 
-    # Servidores Battle.net (estão na Google Cloud).
+    # Battle.net servers (hosted on Google Cloud).
     Blizzard = @{ Name = 'Blizzard'; Regions = @(
-        @('Europa', 'eu.actual.battle.net', 'icmp'),
-        @('EUA', 'us.actual.battle.net', 'icmp'),
-        @('Coreia', 'kr.actual.battle.net', 'icmp')) }
+        @('Europe', 'eu.actual.battle.net', 'icmp'),
+        @('US', 'us.actual.battle.net', 'icmp'),
+        @('Korea', 'kr.actual.battle.net', 'icmp')) }
 
-    # Rainbow Six e outros: Azure (regiões da config do jogo) e AWS GameLift em algumas regiões.
+    # Rainbow Six and others: Azure (regions from the game's config) and AWS GameLift in some regions.
     Ubisoft = @{ Name = 'Ubisoft'; Regions = @(
         (New-AzureRegions @('northeurope', 'westeurope', 'eastus', 'centralus', 'southcentralus', 'westus', 'brazilsouth')) +
         @(@('AWS Frankfurt', 'dynamodb.eu-central-1.amazonaws.com', 'icmp'),
-          @('AWS EUA Este', 'dynamodb.us-east-1.amazonaws.com', 'icmp'))) }
+          @('AWS US East', 'dynamodb.us-east-1.amazonaws.com', 'icmp'))) }
 
-    # Xbox / jogos da Microsoft: Azure.
+    # Xbox / Microsoft games: Azure.
     Microsoft = @{ Name = 'Microsoft / Xbox'; Regions = @(
         New-AzureRegions @('northeurope', 'westeurope', 'francecentral', 'uksouth', 'germanywestcentral', 'spaincentral',
                            'swedencentral', 'eastus', 'centralus', 'westus', 'brazilsouth', 'japaneast', 'koreacentral',
                            'southeastasia', 'australiaeast')) }
 
-    # The Finals / Arc Raiders correm na Google Cloud, mas a Embark não tem endpoints públicos de ping.
-    # Referência: regiões Google Cloud onde há servidores públicos que respondem (os do Battle.net).
+    # The Finals / Arc Raiders run on Google Cloud, but Embark has no public ping endpoints.
+    # Reference: Google Cloud regions with public servers that respond (the Battle.net ones).
     Embark = @{ Name = 'Embark'; Regions = @(
-        @('Google Cloud Holanda', 'eu.actual.battle.net', 'icmp'),
-        @('Google Cloud EUA', 'us.actual.battle.net', 'icmp'),
-        @('Google Cloud Coreia', 'kr.actual.battle.net', 'icmp')) }
+        @('Google Cloud NL', 'eu.actual.battle.net', 'icmp'),
+        @('Google Cloud US', 'us.actual.battle.net', 'icmp'),
+        @('Google Cloud KR', 'kr.actual.battle.net', 'icmp')) }
 }
 $script:GameTargets = $null
 
-# Normalizar -Services: aceita "Epic,Valve", "epic valve" ou -Services Epic,Valve; nomes sem maiúsculas certas.
+# Normalize -Services: accepts "Epic,Valve", "epic valve" or -Services Epic,Valve; any letter case.
 $script:ArgError = $null
 $wantedServices = @($Services | ForEach-Object { $_ -split '[,;\s]+' } | Where-Object { $_ })
 $Services = @(foreach ($w in $wantedServices) {
     $match = @($GameServices.Keys) | Where-Object { $_ -eq $w } | Select-Object -First 1
     if ($match) { $match }
     elseif (-not $script:ArgError) {
-        # Mostrado pelo tratamento de erros normal, depois do banner.
-        $script:ArgError = "Serviço desconhecido em -Services: '$w'. Opções: $(@($GameServices.Keys) -join ', ')"
+        # Shown by the normal error handling, after the banner.
+        $script:ArgError = "Unknown service in -Services: '$w'. Options: $(@($GameServices.Keys) -join ', ')"
     }
 })
 
-# Placas que nunca tocamos (VPNs, virtuais, Bluetooth).
+# Adapters we never touch (VPNs, virtual, Bluetooth).
 $ExcludeAdapters = 'Bluetooth|Virtual|\bTAP\b|Tunnel|VPN|Wintun|WireGuard|Hyper-V|Loopback|Check Point|TunnelBear'
 
-# ---------------------------------------------------------------- aparência
+# ---------------------------------------------------------------- look and feel
 
 $G = if ($Ascii) {
     @{ Ok = '+'; Bad = 'x'; Warn = '!'; Info = '-'; Sim = '~'; Arrow = '->'; Up = '^'; Down = 'v'
@@ -262,7 +263,7 @@ function Write-Warn2([string]$Text, [int]$Indent = 2) { Write-Seg ((' ' * $Inden
 function Write-Bad([string]$Text, [int]$Indent = 2)   { Write-Seg ((' ' * $Indent) + "$($G.Bad) ") Red;    Write-Host $Text -ForegroundColor Red }
 
 function Write-Change([string]$Label, [string]$From, [string]$To, [string]$Note = '') {
-    # Uma alteração feita (ou simulada com -WhatIf). Conta para o resumo.
+    # One change made (or simulated with -WhatIf). Counts towards the summary.
     $sim = [bool]$WhatIfPreference
     if ($sim) { Write-Seg "    $($G.Sim) " Cyan } else { Write-Seg "    $($G.Ok) " Green }
     Write-Seg $Label White
@@ -270,13 +271,13 @@ function Write-Change([string]$Label, [string]$From, [string]$To, [string]$Note 
     Write-Seg $G.Arrow DarkGray
     Write-Seg " $To" Green
     if ($Note) { Write-Seg "  ($Note)" DarkGray }
-    if ($sim)  { Write-Seg '  [simulação]' DarkCyan }
+    if ($sim)  { Write-Seg '  [simulated]' DarkCyan }
     Write-Host ''
     $script:ChangeCount++
 }
 
 function Write-KV([string]$Key, [string]$Value, [string]$State = 'none', [string]$Hint = '') {
-    # Linha "chave ······ valor" com estado: ok (verde), warn (amarelo, o Apply muda), bad, none.
+    # "key ······ value" line with a state: ok (green), warn (yellow, Apply changes it), bad, none.
     $w = 30
     if ($Key.Length -gt $w - 2) { $Key = $Key.Substring(0, $w - 3) + $G.Ell }
     Write-Seg "    $Key" Gray
@@ -293,7 +294,7 @@ function Write-KV([string]$Key, [string]$Value, [string]$State = 'none', [string
 }
 
 function Write-Box([string]$Title, [object[]]$Lines, [ConsoleColor]$Frame = 'DarkCyan') {
-    # $Lines: lista de @(glifo, cor, texto)
+    # $Lines: list of @(glyph, color, text)
     $contents = @($Lines | ForEach-Object { "$($_[0]) $($_[2])" })
     $width = ($contents | ForEach-Object { $_.Length } | Measure-Object -Maximum).Maximum
     $width = [math]::Max([int]$width, $Title.Length + 2)
@@ -314,9 +315,9 @@ function Write-Box([string]$Title, [object[]]$Lines, [ConsoleColor]$Frame = 'Dar
 
 function Write-Banner {
     $info = @{
-        Test   = @('TESTE',   'Só mede e mostra o estado. Não muda nada.',            'Cyan')
-        Apply  = @('APLICAR', 'Mede, faz backup, aplica os ajustes e volta a medir.', 'Green')
-        Revert = @('REPOR',   'Repõe o backup e desfaz os ajustes.',                  'Magenta')
+        Test   = @('TEST',   'Measures and shows the state. Changes nothing.',            'Cyan')
+        Apply  = @('APPLY',  'Measures, backs up, applies the tweaks, measures again.',   'Green')
+        Revert = @('REVERT', 'Restores the backup and undoes the tweaks.',                'Magenta')
     }[$Mode]
     $w = 62
     $badge = " $($info[0]) "
@@ -331,14 +332,14 @@ function Write-Banner {
     Write-Host $badge -NoNewline -ForegroundColor Black -BackgroundColor $info[2]
     Write-Host "  $($G.V)" -ForegroundColor DarkCyan
 
-    foreach ($line in @(@("Ping estável para jogar $($G.Dot) Windows 10/11", 'Gray'), @($info[1], 'DarkGray'))) {
+    foreach ($line in @(@("Stable ping for gaming $($G.Dot) Windows 10/11", 'Gray'), @($info[1], 'DarkGray'))) {
         Write-Seg "  $($G.V)  " DarkCyan
         Write-Seg ($line[0].PadRight($w - 4)) $line[1]
         Write-Host "  $($G.V)" -ForegroundColor DarkCyan
     }
     if ($WhatIfPreference) {
         Write-Seg "  $($G.V)  " DarkCyan
-        Write-Seg ('Simulação (-WhatIf): nada vai ser mudado.'.PadRight($w - 4)) Yellow
+        Write-Seg ('Simulation (-WhatIf): nothing will be changed.'.PadRight($w - 4)) Yellow
         Write-Host "  $($G.V)" -ForegroundColor DarkCyan
     }
     Write-Host ("  $($G.BL)" + ($G.H * $w) + $G.BR) -ForegroundColor DarkCyan
@@ -346,9 +347,9 @@ function Write-Banner {
 
 function Write-AdapterHeader($Adapter) {
     $st = switch ([string]$Adapter.Status) {
-        'Up'           { @('ligada', 'Green') }
-        'Disconnected' { @('sem ligação', 'Yellow') }
-        'Disabled'     { @('desativada', 'DarkGray') }
+        'Up'           { @('connected', 'Green') }
+        'Disconnected' { @('disconnected', 'Yellow') }
+        'Disabled'     { @('disabled', 'DarkGray') }
         default        { @([string]$Adapter.Status, 'Gray') }
     }
     Write-Host ''
@@ -370,7 +371,7 @@ function Format-Fit([string]$Text, [int]$Width) {
     return $Text.PadRight($Width)
 }
 
-# ---------------------------------------------------------------- utilitários
+# ---------------------------------------------------------------- utilities
 
 function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -380,7 +381,7 @@ function Test-IsAdmin {
 
 function Assert-Admin {
     if (-not (Test-IsAdmin)) {
-        throw 'Este modo precisa de administrador. Abre o PowerShell com "Executar como administrador" e corre outra vez.'
+        throw 'This mode needs administrator rights. Open PowerShell with "Run as administrator" and run it again.'
     }
 }
 
@@ -390,15 +391,15 @@ function Get-TargetAdapters {
 }
 
 function Get-ActiveRoute {
-    # A rota que o Windows usa MESMO para a internet. Uma placa desligada pode ter uma rota guardada,
-    # por isso não chega ordenar pela métrica da rota.
+    # The route Windows ACTUALLY uses for the internet. A disconnected adapter can keep a stored
+    # route, so sorting by route metric alone is not enough.
     try {
         $r = @(Find-NetRoute -RemoteIPAddress '1.1.1.1' -ErrorAction Stop) |
             Where-Object { $_.CimClass.CimClassName -eq 'MSFT_NetRoute' } | Select-Object -First 1
         if ($r -and $r.NextHop -and $r.NextHop -ne '0.0.0.0') { return $r }
     } catch { }
 
-    # Plano B: só placas ligadas, métrica da rota + métrica da placa (é assim que o Windows escolhe).
+    # Plan B: connected adapters only, route metric + interface metric (that is how Windows chooses).
     $best = $null
     $bestMetric = [int]::MaxValue
     foreach ($r in @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -and $_.NextHop -ne '0.0.0.0' })) {
@@ -421,7 +422,7 @@ function Wait-Network([int]$TimeoutSec = 40) {
     try {
         while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
             $s = [int]$sw.Elapsed.TotalSeconds
-            Write-Progress -Id 2 -Activity 'À espera que a rede volte' -Status "$s s / $TimeoutSec s" -PercentComplete ([math]::Min(100, [int](100 * $s / $TimeoutSec)))
+            Write-Progress -Id 2 -Activity 'Waiting for the network to come back' -Status "$s s / $TimeoutSec s" -PercentComplete ([math]::Min(100, [int](100 * $s / $TimeoutSec)))
             $gw = Get-DefaultGateway
             if ($gw) {
                 try {
@@ -433,16 +434,16 @@ function Wait-Network([int]$TimeoutSec = 40) {
         }
         return $false
     } finally {
-        Write-Progress -Id 2 -Activity 'À espera que a rede volte' -Completed
+        Write-Progress -Id 2 -Activity 'Waiting for the network to come back' -Completed
     }
 }
 
 function Get-WifiPowerPlan {
-    # Lê o "Modo de poupança de energia" do Wi-Fi no plano ativo. Devolve $null se não existir.
+    # Reads the Wi-Fi "Power Saving Mode" from the active plan. Returns $null if it does not exist.
     try {
         $scheme = [regex]::Match((powercfg /getactivescheme | Out-String), '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}').Value
         if (-not $scheme) { return $null }
-        # As duas últimas linhas com 0x.. são sempre AC e DC (independente da língua do Windows).
+        # The last two lines with 0x.. are always AC and DC (regardless of the Windows language).
         $vals = @(powercfg /q $scheme $WifiPowerSub $WifiPowerSet 2>$null |
             Where-Object { $_ -match ':\s*0x[0-9a-fA-F]+\s*$' } |
             ForEach-Object { [Convert]::ToInt32([regex]::Match($_, '0x([0-9a-fA-F]+)').Groups[1].Value, 16) })
@@ -455,19 +456,19 @@ function Get-WifiPowerPlan {
 
 function Set-WifiPowerPlan([string]$Scheme, [int]$AC, [int]$DC) {
     powercfg /setacvalueindex $Scheme $WifiPowerSub $WifiPowerSet $AC | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "powercfg falhou (AC, código $LASTEXITCODE)" }
+    if ($LASTEXITCODE -ne 0) { throw "powercfg failed (AC, exit code $LASTEXITCODE)" }
     powercfg /setdcvalueindex $Scheme $WifiPowerSub $WifiPowerSet $DC | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "powercfg falhou (DC, código $LASTEXITCODE)" }
+    if ($LASTEXITCODE -ne 0) { throw "powercfg failed (DC, exit code $LASTEXITCODE)" }
     powercfg /setactive $Scheme | Out-Null
 }
 
 function Format-WifiPower([int]$Value) {
     if ($Value -ge 0 -and $Value -lt $WifiPowerNames.Count) { return $WifiPowerNames[$Value] }
-    return "valor $Value"
+    return "value $Value"
 }
 
 function Get-AdapterClassKey([string]$InterfaceGuid) {
-    # A subchave 00XX da classe de rede cujo NetCfgInstanceId é o InterfaceGuid da placa.
+    # The 00XX subkey of the network class whose NetCfgInstanceId is the adapter's InterfaceGuid.
     Get-ChildItem -Path $NetClassKey -ErrorAction SilentlyContinue |
         Where-Object { $_.PSChildName -match '^\d{4}$' } |
         Where-Object {
@@ -478,19 +479,19 @@ function Get-AdapterClassKey([string]$InterfaceGuid) {
 }
 
 function Get-PnPCapabilities([string]$KeyPath) {
-    # Devolve o valor (int) ou $null se a entrada não existir.
+    # Returns the value (int) or $null if the entry does not exist.
     $prop = (Get-ItemProperty -Path $KeyPath -ErrorAction Stop).PSObject.Properties['PnPCapabilities']
     if ($prop) { return [int]$prop.Value }
     return $null
 }
 
 function Format-PnPCap($Value) {
-    if ($null -eq $Value) { return 'sim (PnPCapabilities não existe)' }
-    if ($Value -eq $PnPCapOff) { return "não (PnPCapabilities = $Value)" }
-    return "sim (PnPCapabilities = $Value)"
+    if ($null -eq $Value) { return 'yes (PnPCapabilities not set)' }
+    if ($Value -eq $PnPCapOff) { return "no (PnPCapabilities = $Value)" }
+    return "yes (PnPCapabilities = $Value)"
 }
 
-# ---------------------------------------------------------------- testes
+# ---------------------------------------------------------------- tests
 
 function Get-Grade($Value, [double]$Good, [double]$Fair) {
     if ($null -eq $Value) { return 'bad' }
@@ -510,7 +511,7 @@ function New-Target([string]$Label, [string]$HostName, [string]$Kind, [string]$M
 }
 
 function Resolve-HostV4([string]$HostName) {
-    # Resolve o nome uma vez só (senão cada ping faz uma consulta DNS e uma falha de DNS conta como perda).
+    # Resolve the name only once (otherwise every ping does a DNS lookup and a DNS failure counts as loss).
     if (-not $HostName) { return $null }
     $parsed = $null
     if ([Net.IPAddress]::TryParse($HostName, [ref]$parsed)) { return $HostName }
@@ -524,7 +525,7 @@ function Resolve-HostV4([string]$HostName) {
 }
 
 function Measure-TcpOnce([string]$Ip, [int]$Port = 443, [int]$TimeoutMs = 1000) {
-    # Tempo do handshake TCP (SYN -> SYN/ACK), em ms. $null se falhar ou passar do tempo.
+    # TCP handshake time (SYN -> SYN/ACK) in ms. $null if it fails or times out.
     $client = New-Object System.Net.Sockets.TcpClient
     try {
         $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -539,7 +540,7 @@ function Measure-TcpOnce([string]$Ip, [int]$Port = 443, [int]$TimeoutMs = 1000) 
 }
 
 function Get-SteamRelayRegions {
-    # Lista oficial de relays SDR da Valve (uma região por datacenter, no mundo todo).
+    # Official list of Valve SDR relays (one region per datacenter, worldwide).
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $json = Invoke-RestMethod -Uri 'https://api.steampowered.com/ISteamApps/GetSDRConfig/v1/?appid=730' -TimeoutSec 8 -UseBasicParsing
@@ -558,7 +559,7 @@ function Get-SteamRelayRegions {
 }
 
 function Select-GameTargets {
-    # Para cada serviço pedido, mede todas as regiões rapidamente e devolve um alvo com a mais próxima.
+    # For each requested service, quickly measures every region and returns one target with the closest.
     $cands = New-Object System.Collections.Generic.List[object]
     foreach ($key in $GameServices.Keys) {
         if ($Services -notcontains $key) { continue }
@@ -566,17 +567,17 @@ function Select-GameTargets {
         $regions = $svc.Regions
         if ($svc.ContainsKey('Dynamic') -and $svc.Dynamic -eq 'SteamSDR') {
             $live = Get-SteamRelayRegions
-            if ($live) { $regions = $live } else { Write-Warn2 'Steam: não consegui obter a lista de relays, a usar a lista interna.' }
+            if ($live) { $regions = $live } else { Write-Warn2 'Steam: could not fetch the relay list, using the built-in list.' }
         }
         foreach ($r in $regions) {
             $cands.Add([pscustomobject]@{ Key = $key; Service = $svc.Name; Region = $r[0]; Host = $r[1]; Method = $r[2]; Ip = $null; Best = $null })
         }
     }
     if ($cands.Count -eq 0) { return @() }
-    $activity = 'A escolher a região mais próxima de cada serviço'
+    $activity = 'Finding the closest region for each service'
 
-    # 1) Resolver todos os nomes em paralelo.
-    Write-Progress -Id 3 -Activity $activity -Status 'A resolver nomes (DNS)...' -PercentComplete 5
+    # 1) Resolve every name in parallel.
+    Write-Progress -Id 3 -Activity $activity -Status 'Resolving names (DNS)...' -PercentComplete 5
     $dnsTasks = @{}
     foreach ($c in $cands) {
         $parsed = $null
@@ -595,15 +596,15 @@ function Select-GameTargets {
         }
     }
 
-    # 2) Medir cada IP único (vários serviços partilham regiões): melhor de 3 pings em paralelo,
-    #    ou melhor de 2 ligações TCP uma a uma (em paralelo o tempo TCP não seria exato).
+    # 2) Measure each unique IP (several services share regions): best of 3 pings in parallel,
+    #    or best of 2 TCP connects one at a time (in parallel the TCP timing would not be accurate).
     $best = @{}
     $icmpIps = @($cands | Where-Object { $_.Ip -and $_.Method -eq 'icmp' } | ForEach-Object { $_.Ip } | Select-Object -Unique)
     $tcpIps  = @($cands | Where-Object { $_.Ip -and $_.Method -eq 'tcp' }  | ForEach-Object { $_.Ip } | Select-Object -Unique)
 
     if ($icmpIps.Count -gt 0) {
         for ($round = 1; $round -le 3; $round++) {
-            Write-Progress -Id 3 -Activity $activity -Status "Ping a $($icmpIps.Count) servidores (ronda $round/3)..." -PercentComplete (5 + 15 * $round)
+            Write-Progress -Id 3 -Activity $activity -Status "Pinging $($icmpIps.Count) servers (round $round/3)..." -PercentComplete (5 + 15 * $round)
             $jobs = foreach ($ip in $icmpIps) {
                 $p = New-Object System.Net.NetworkInformation.Ping
                 [pscustomobject]@{ Ip = $ip; Ping = $p; Task = $p.SendPingAsync($ip, 1000) }
@@ -620,12 +621,12 @@ function Select-GameTargets {
     }
 
     if ($tcpIps.Count -gt 0) {
-        [void](Measure-TcpOnce $tcpIps[0] 443 1000)   # aquecimento: a primeira ligação é sempre mais lenta
+        [void](Measure-TcpOnce $tcpIps[0] 443 1000)   # warm-up: the first connection is always slower
         $done = 0
         for ($round = 1; $round -le 2; $round++) {
             foreach ($ip in $tcpIps) {
                 $done++
-                Write-Progress -Id 3 -Activity $activity -Status "Ligação TCP a $($tcpIps.Count) servidores (ronda $round/2)..." -PercentComplete (65 + [int](35 * $done / (2 * $tcpIps.Count)))
+                Write-Progress -Id 3 -Activity $activity -Status "TCP connect to $($tcpIps.Count) servers (round $round/2)..." -PercentComplete (65 + [int](35 * $done / (2 * $tcpIps.Count)))
                 $ms = Measure-TcpOnce $ip 443 700
                 if ($null -ne $ms -and (-not $best.ContainsKey($ip) -or $ms -lt $best[$ip])) { $best[$ip] = $ms }
             }
@@ -635,14 +636,14 @@ function Select-GameTargets {
 
     foreach ($c in $cands) { if ($c.Ip -and $best.ContainsKey($c.Ip)) { $c.Best = $best[$c.Ip] } }
 
-    # 3) Um alvo por serviço, pela ordem da lista.
+    # 3) One target per service, in list order.
     foreach ($key in @($cands | ForEach-Object { $_.Key } | Select-Object -Unique)) {
         $mine = @($cands | Where-Object { $_.Key -eq $key })
         $winner = $mine | Where-Object { $null -ne $_.Best } | Sort-Object Best | Select-Object -First 1
         if ($winner) {
-            New-Target $winner.Service $winner.Ip 'jogo' $winner.Method $winner.Region
+            New-Target $winner.Service $winner.Ip 'game' $winner.Method $winner.Region
         } else {
-            New-Target $mine[0].Service '' 'jogo' 'icmp' 'nenhuma região respondeu'
+            New-Target $mine[0].Service '' 'game' 'icmp' 'no region responded'
         }
     }
 }
@@ -660,11 +661,11 @@ function Measure-Target($Target, [int]$Pings, [int]$Index, [int]$Total) {
     $rtts = New-Object System.Collections.Generic.List[double]
     $lost = 0
     try {
-        if ($useTcp) { [void](Measure-TcpOnce $address 443 1000) }   # aquecimento
+        if ($useTcp) { [void](Measure-TcpOnce $address 443 1000) }   # warm-up
         for ($i = 0; $i -lt $Pings; $i++) {
             $pct = [int](100 * (($Index - 1) * $Pings + $i) / ($Total * $Pings))
             $where = if ($Target.Region) { $Target.Region } else { $address }
-            Write-Progress -Id 1 -Activity 'Teste de ligação' -Status ("{0}/{1}  {2}  ({3})   {4} {5}/{6}" -f $Index, $Total, $Label, $where, $(if ($useTcp) { 'tcp' } else { 'ping' }), ($i + 1), $Pings) -PercentComplete $pct
+            Write-Progress -Id 1 -Activity 'Connection test' -Status ("{0}/{1}  {2}  ({3})   {4} {5}/{6}" -f $Index, $Total, $Label, $where, $(if ($useTcp) { 'tcp' } else { 'ping' }), ($i + 1), $Pings) -PercentComplete $pct
             if ($useTcp) {
                 $ms = Measure-TcpOnce $address 443 1000
                 if ($null -ne $ms) { $rtts.Add([math]::Round($ms, 1)) } else { $lost++ }
@@ -709,15 +710,15 @@ function Measure-Target($Target, [int]$Pings, [int]$Index, [int]$Total) {
     }
 }
 
-# Colunas da tabela de resultados: título, largura.
-$ResultCols = @(@('Alvo', 18), @('Servidor', 24), @('Min', 5), @('Média', 8), @('Máx', 7), @('Jitter', 8), @('Picos', 7), @('Perda', 8))
+# Results table columns: title, width.
+$ResultCols = @(@('Target', 18), @('Server', 24), @('Min', 5), @('Avg', 8), @('Max', 7), @('Jitter', 8), @('Spikes', 7), @('Loss', 8))
 
 function Write-ResultHeader {
     Write-Seg '  '
     foreach ($c in $ResultCols) {
-        if ($c[0] -in 'Alvo', 'Servidor') { Write-Seg $c[0].PadRight($c[1]) DarkGray } else { Write-Seg $c[0].PadLeft($c[1]) DarkGray }
+        if ($c[0] -in 'Target', 'Server') { Write-Seg $c[0].PadRight($c[1]) DarkGray } else { Write-Seg $c[0].PadLeft($c[1]) DarkGray }
     }
-    Write-Host '    Estado' -ForegroundColor DarkGray
+    Write-Host '    Status' -ForegroundColor DarkGray
     $total = ($ResultCols | ForEach-Object { $_[1] } | Measure-Object -Sum).Sum + 16
     Write-Host ('  ' + ($G.H * $total)) -ForegroundColor DarkGray
 }
@@ -732,11 +733,11 @@ function Write-ResultRow($R) {
     if ($null -eq $R.Media) {
         Write-Seg ('-'.PadLeft(5) + '-'.PadLeft(8) + '-'.PadLeft(7) + '-'.PadLeft(8) + '-'.PadLeft(7)) DarkGray
         Write-Seg '100%'.PadLeft(8) Red
-        Write-Host "    $($G.Bad) sem resposta" -ForegroundColor Red
+        Write-Host "    $($G.Bad) no response" -ForegroundColor Red
         return
     }
 
-    # Limites da média conforme o tipo de alvo.
+    # Average limits depend on the target type.
     $lim = switch ($R.Tipo) { 'router' { @(5, 15) } 'internet' { @(40, 80) } default { @(60, 100) } }
     $gMed   = Get-Grade $R.Media $lim[0] $lim[1]
     $gMax   = Get-Grade ($R.Max - $R.Min) 30 100
@@ -752,9 +753,9 @@ function Write-ResultRow($R) {
     Write-Seg ((Format-Num $R.'Perda%') + '%').PadLeft(8) $StateColor[$gPerda]
 
     switch (Get-WorstGrade @($gMed, $gMax, $gJit, $gPicos, $gPerda)) {
-        'ok'   { Write-Host "    $($G.Ok) ótimo" -ForegroundColor Green }
-        'warn' { Write-Host "    $($G.Warn) razoável" -ForegroundColor Yellow }
-        'bad'  { Write-Host "    $($G.Bad) instável" -ForegroundColor Red }
+        'ok'   { Write-Host "    $($G.Ok) great" -ForegroundColor Green }
+        'warn' { Write-Host "    $($G.Warn) fair" -ForegroundColor Yellow }
+        'bad'  { Write-Host "    $($G.Bad) unstable" -ForegroundColor Red }
     }
 }
 
@@ -762,23 +763,23 @@ function Invoke-NetTest([string]$Title) {
     Write-Title $Title
     $targets = New-Object System.Collections.Generic.List[object]
     $gw = Get-DefaultGateway
-    if ($gw) { $targets.Add((New-Target 'Router' $gw 'router' 'icmp' $gw)) } else { Write-Warn2 'Não encontrei o router (gateway). Estás ligado a alguma rede?' }
+    if ($gw) { $targets.Add((New-Target 'Router' $gw 'router' 'icmp' $gw)) } else { Write-Warn2 'Could not find the router (gateway). Are you connected to a network?' }
     $targets.Add((New-Target 'Cloudflare' '1.1.1.1' 'internet' 'icmp' '1.1.1.1'))
     $targets.Add((New-Target 'Google' '8.8.8.8' 'internet' 'icmp' '8.8.8.8'))
 
-    # As regiões são escolhidas uma vez só: no Apply, o teste "depois" usa os mesmos servidores que o "antes".
+    # Regions are picked only once: in Apply, the "after" test uses the same servers as "before".
     if ($null -eq $script:GameTargets) {
         if ($Services.Count -gt 0) {
-            Write-Info "A procurar a região mais próxima de cada serviço ($($Services.Count) serviços)..."
+            Write-Info "Finding the closest region for each service ($($Services.Count) services)..."
         }
         $script:GameTargets = @(Select-GameTargets)
     }
     foreach ($t in $script:GameTargets) { $targets.Add($t) }
-    foreach ($t in $ExtraTargets) { $targets.Add((New-Target 'Extra' $t 'jogo' 'icmp' $t)) }
+    foreach ($t in $ExtraTargets) { $targets.Add((New-Target 'Extra' $t 'game' 'icmp' $t)) }
 
     $secs = [math]::Ceiling($targets.Count * $Count * 0.22)
-    Write-Info "$($targets.Count) alvos $($G.Dot) $Count medições cada $($G.Dot) cerca de $secs s $($G.Dot) valores em ms"
-    Write-Info 'Não uses a net durante o teste (downloads, streams, jogos).'
+    Write-Info "$($targets.Count) targets $($G.Dot) $Count samples each $($G.Dot) about $secs s $($G.Dot) values in ms"
+    Write-Info 'Do not use the network during the test (downloads, streams, games).'
     Write-Host ''
     Write-ResultHeader
 
@@ -792,37 +793,37 @@ function Invoke-NetTest([string]$Title) {
             $results += $r
         }
     } finally {
-        Write-Progress -Id 1 -Activity 'Teste de ligação' -Completed
+        Write-Progress -Id 1 -Activity 'Connection test' -Completed
     }
 
     Write-Host ''
-    Write-Seg '  ' ; Write-Seg 'verde' Green; Write-Seg ' = bom   ' DarkGray; Write-Seg 'amarelo' Yellow; Write-Seg ' = razoável   ' DarkGray
-    Write-Seg 'vermelho' Red; Write-Host ' = mau' -ForegroundColor DarkGray
+    Write-Seg '  ' ; Write-Seg 'green' Green; Write-Seg ' = good   ' DarkGray; Write-Seg 'yellow' Yellow; Write-Seg ' = fair   ' DarkGray
+    Write-Seg 'red' Red; Write-Host ' = bad' -ForegroundColor DarkGray
     if ($script:GameTargets.Count -gt 0) {
-        Write-Host "  Servidor = a região mais próxima de ti, escolhida automaticamente." -ForegroundColor DarkGray
+        Write-Host "  Server = the region closest to you, picked automatically." -ForegroundColor DarkGray
     }
     if (@($targets | Where-Object { $_.Method -eq 'tcp' }).Count -gt 0) {
-        Write-Host "  tcp = medido pelo tempo de ligação TCP (esses servidores bloqueiam o ping)." -ForegroundColor DarkGray
+        Write-Host "  tcp = measured by TCP connect time (those servers block ping)." -ForegroundColor DarkGray
     }
 
     $router = $results | Where-Object { $_.Tipo -eq 'router' } | Select-Object -First 1
     if ($router -and $null -ne $router.Media) {
         Write-Host ''
-        # Mesmos critérios da tabela, para a frase bater certo com a coluna "Estado".
+        # Same criteria as the table, so the sentence matches the "Status" column.
         $grade = Get-WorstGrade @(
             (Get-Grade $router.Media 5 15),
             (Get-Grade $router.Jitter 5 15),
             (Get-Grade $router.'Picos>100' 0 2),
             (Get-Grade $router.'Perda%' 0 2))
         switch ($grade) {
-            'ok'   { Write-Ok 'Ligação ao router estável: a parte local (placa, driver, Wi-Fi) está bem.' }
+            'ok'   { Write-Ok 'Router connection is stable: the local side (adapter, driver, Wi-Fi) is fine.' }
             'warn' {
-                Write-Warn2 'Ligação ao router razoável: devia ser 1-5 ms e estável.'
-                Write-Info  'Pode ser só um momento mau do Wi-Fi. Repete com mais pings (-Count 50) para confirmar.' 4
+                Write-Warn2 'Router connection is fair: it should be 1-5 ms and stable.'
+                Write-Info  'It may just be a bad Wi-Fi moment. Run again with more pings (-Count 50) to confirm.' 4
             }
             'bad'  {
-                Write-Bad   'Ligação ao router instável: devia ser 1-5 ms e estável.'
-                Write-Info  'O problema é local (placa, driver ou Wi-Fi), não a operadora nem o jogo.' 4
+                Write-Bad   'Router connection is unstable: it should be 1-5 ms and stable.'
+                Write-Info  'The problem is local (adapter, driver or Wi-Fi), not your ISP or the game.' 4
             }
         }
     }
@@ -830,7 +831,7 @@ function Invoke-NetTest([string]$Title) {
 }
 
 function Write-Delta($Before, $After, [double]$Tolerance, [string]$Suffix = '') {
-    # "antes → agora  ▼Δ" com a cor da melhoria (menos é melhor). Ocupa 24 colunas.
+    # "before → now  ▼Δ" colored by improvement (lower is better). Takes 24 columns.
     if ($null -eq $Before -or $null -eq $After) {
         Write-Seg ('-'.PadLeft(13) + (' ' * 11)) DarkGray
         return
@@ -847,12 +848,12 @@ function Write-Delta($Before, $After, [double]$Tolerance, [string]$Suffix = '') 
 }
 
 function Show-Comparison($Before, $After) {
-    Write-Title 'Antes vs depois'
+    Write-Title 'Before vs after'
     Write-Seg '  '
-    Write-Seg 'Alvo'.PadRight(18) DarkGray
-    Write-Seg 'Média'.PadLeft(13) DarkGray; Write-Seg (' ' * 11)
+    Write-Seg 'Target'.PadRight(18) DarkGray
+    Write-Seg 'Avg'.PadLeft(13) DarkGray; Write-Seg (' ' * 11)
     Write-Seg 'Jitter'.PadLeft(13) DarkGray; Write-Seg (' ' * 11)
-    Write-Host 'Perda'.PadLeft(13) -ForegroundColor DarkGray
+    Write-Host 'Loss'.PadLeft(13) -ForegroundColor DarkGray
     Write-Host ('  ' + ($G.H * 90)) -ForegroundColor DarkGray
 
     foreach ($b in $Before) {
@@ -865,14 +866,14 @@ function Show-Comparison($Before, $After) {
         Write-Host ''
     }
     Write-Host ''
-    Write-Seg '  '; Write-Seg "$($G.Down) desceu (melhor)" Green; Write-Seg '   '; Write-Seg "$($G.Up) subiu (pior)" Red
-    Write-Host '   = igual' -ForegroundColor DarkGray
+    Write-Seg '  '; Write-Seg "$($G.Down) down (better)" Green; Write-Seg '   '; Write-Seg "$($G.Up) up (worse)" Red
+    Write-Host '   = same' -ForegroundColor DarkGray
 }
 
 # ---------------------------------------------------------------- dns
 
 function New-DnsQuery([string]$Name, [int]$Id) {
-    # Pacote DNS mínimo: cabeçalho com "recursion desired" + uma pergunta do tipo A.
+    # Minimal DNS packet: header with "recursion desired" + one type A question.
     $bytes = New-Object System.Collections.Generic.List[byte]
     $bytes.AddRange([byte[]]@((($Id -shr 8) -band 0xFF), ($Id -band 0xFF), 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
     foreach ($label in $Name.Split('.')) {
@@ -880,12 +881,12 @@ function New-DnsQuery([string]$Name, [int]$Id) {
         $bytes.Add([byte]$b.Length)
         $bytes.AddRange($b)
     }
-    $bytes.AddRange([byte[]]@(0, 0, 1, 0, 1))   # fim do nome, tipo A, classe IN
+    $bytes.AddRange([byte[]]@(0, 0, 1, 0, 1))   # end of name, type A, class IN
     return $bytes.ToArray()
 }
 
 function Measure-DnsQuery([string]$Server, [string]$Name, [int]$TimeoutMs = 1500) {
-    # Envia uma consulta UDP diretamente ao servidor e mede até à resposta. $null se não responder.
+    # Sends one UDP query straight to the server and times the reply. $null if it does not answer.
     $udp = New-Object System.Net.Sockets.UdpClient
     try {
         $udp.Client.ReceiveTimeout = $TimeoutMs
@@ -918,7 +919,7 @@ function Get-Median([double[]]$Values) {
 }
 
 function Get-ActiveDnsServers {
-    # Servidores DNS (IPv4) da placa que está mesmo a levar o tráfego para a internet.
+    # DNS servers (IPv4) of the adapter actually carrying the internet traffic.
     $route = Get-ActiveRoute
     if (-not $route) { return @() }
     try {
@@ -929,7 +930,7 @@ function Get-ActiveDnsServers {
 }
 
 function Test-PrivateIp([string]$Ip) {
-    # Router, rede local, CGNAT ou link-local: um DNS aqui só reencaminha para outro (normalmente o da operadora).
+    # Router, local network, CGNAT or link-local: a DNS here only forwards to another one (usually the ISP's).
     $addr = $null
     if (-not [Net.IPAddress]::TryParse($Ip, [ref]$addr)) { return $false }
     if ($addr.AddressFamily -eq 'InterNetworkV6') {
@@ -941,7 +942,7 @@ function Test-PrivateIp([string]$Ip) {
 }
 
 function Get-AdapterDnsList([int]$IfIndex, [string]$Family) {
-    # Servidores DNS em uso numa placa, por família ('IPv4' ou 'IPv6').
+    # DNS servers in use on an adapter, per family ('IPv4' or 'IPv6').
     try {
         return @((Get-DnsClientServerAddress -InterfaceIndex $IfIndex -AddressFamily $Family -ErrorAction Stop).ServerAddresses | Where-Object { $_ })
     } catch {
@@ -954,8 +955,8 @@ function Test-SameList([string[]]$A, [string[]]$B) {
 }
 
 function Set-AdapterDnsFamily($Adapter, [string]$Family, [string[]]$Servers) {
-    # Define o DNS de UMA família numa placa, explicitamente (netsh, pelo índice da placa).
-    # $Servers vazio = voltar a automático (DHCP). Devolve a lista que ficou, lida outra vez.
+    # Sets the DNS of ONE family on an adapter, explicitly (netsh, by adapter index).
+    # Empty $Servers = back to automatic (DHCP). Returns the resulting list, read back.
     $proto = if ($Family -eq 'IPv4') { 'ipv4' } else { 'ipv6' }
     $iface = "name=$($Adapter.ifIndex)"
     if (@($Servers).Count -eq 0) {
@@ -970,8 +971,8 @@ function Set-AdapterDnsFamily($Adapter, [string]$Family, [string[]]$Servers) {
 }
 
 function Invoke-DnsBenchmark {
-    # Compara os DNS públicos (e o atual, como referência) e devolve: Choice = preset a aplicar, ou $null.
-    Write-Title 'Teste de DNS'
+    # Compares the public DNS servers (and the current one, as a reference) and returns: Choice = preset to apply, or $null.
+    Write-Title 'DNS test'
 
     $current = @(Get-ActiveDnsServers | Select-Object -First 2)
     $gateway = Get-DefaultGateway
@@ -983,10 +984,10 @@ function Invoke-DnsBenchmark {
         foreach ($k in $DnsPresets.Keys) { if ($DnsPresets[$k] -contains $ip) { $preset = $k } }
         $isLocal = (-not $preset) -and (Test-PrivateIp $ip)
         $suffix = if ($current.Count -gt 1) { " $n" } else { '' }
-        $label = if ($preset) { "Atual ($preset)" }
-                 elseif ($ip -eq $gateway) { "Atual$suffix (router)" }
-                 elseif ($isLocal) { "Atual$suffix (rede local)" }
-                 else { "Atual$suffix (operadora)" }
+        $label = if ($preset) { "Current ($preset)" }
+                 elseif ($ip -eq $gateway) { "Current$suffix (router)" }
+                 elseif ($isLocal) { "Current$suffix (local)" }
+                 else { "Current$suffix (ISP)" }
         $rows.Add([pscustomobject]@{ Label = $label; Ip = $ip; Preset = $preset; IsCurrent = $true; IsLocal = $isLocal
             Times = (New-Object System.Collections.Generic.List[double]); Uncached = (New-Object System.Collections.Generic.List[double])
             Fails = 0; Total = 0; Median = $null; UncMedian = $null; FailPct = 100.0; Dead = $false; Score = $null })
@@ -1001,10 +1002,10 @@ function Invoke-DnsBenchmark {
 
     $rounds = 3
     $uncachedCount = 5
-    Write-Info "$($rows.Count) servidores $($G.Dot) $($DnsTestDomains.Count) domínios x $rounds rondas + $uncachedCount consultas sem cache cada $($G.Dot) valores em ms"
-    if ($current.Count -eq 0) { Write-Warn2 'Não consegui ler o DNS atual da placa ligada; só comparo os públicos.' }
+    Write-Info "$($rows.Count) servers $($G.Dot) $($DnsTestDomains.Count) domains x $rounds rounds + $uncachedCount uncached queries each $($G.Dot) values in ms"
+    if ($current.Count -eq 0) { Write-Warn2 'Could not read the current DNS of the connected adapter; comparing the public ones only.' }
 
-    # Os servidores são intercalados em cada consulta, para todos apanharem as mesmas condições da rede.
+    # Servers are interleaved on every query, so they all get the same network conditions.
     $totalQ = $rows.Count * ($DnsTestDomains.Count * $rounds + $uncachedCount)
     $done = 0
     try {
@@ -1013,21 +1014,21 @@ function Invoke-DnsBenchmark {
                 foreach ($r in $rows) {
                     $done++
                     if ($r.Dead) { continue }
-                    if ($done % 4 -eq 0) { Write-Progress -Id 4 -Activity 'Teste de DNS' -Status "Ronda $round/$rounds  $($G.Dot)  $d" -PercentComplete ([int](100 * $done / $totalQ)) }
+                    if ($done % 4 -eq 0) { Write-Progress -Id 4 -Activity 'DNS test' -Status "Round $round/$rounds  $($G.Dot)  $d" -PercentComplete ([int](100 * $done / $totalQ)) }
                     $res = Measure-DnsQuery $r.Ip $d
                     $r.Total++
                     if ($res -and ($res.RCode -eq 0 -or $res.RCode -eq 3)) { $r.Times.Add($res.Ms) } else { $r.Fails++ }
-                    # 3 falhas sem nenhuma resposta: o servidor não chega cá (ou a rede bloqueia). Não vale esperar mais.
+                    # 3 failures without a single answer: the server cannot be reached (or the network blocks it). No point waiting.
                     if ($r.Times.Count -eq 0 -and $r.Fails -ge 3) { $r.Dead = $true }
                 }
             }
         }
-        # Sem cache: nomes aleatórios obrigam o servidor a perguntar aos servidores do domínio.
+        # Uncached: random names force the server to ask the domain's own servers.
         for ($u = 1; $u -le $uncachedCount; $u++) {
             foreach ($r in $rows) {
                 $done++
                 if ($r.Dead) { continue }
-                Write-Progress -Id 4 -Activity 'Teste de DNS' -Status 'Consultas sem cache...' -PercentComplete ([int](100 * $done / $totalQ))
+                Write-Progress -Id 4 -Activity 'DNS test' -Status 'Uncached queries...' -PercentComplete ([int](100 * $done / $totalQ))
                 $name = 'nt' + [guid]::NewGuid().ToString('N').Substring(0, 12) + '.google.com'
                 $res = Measure-DnsQuery $r.Ip $name 2500
                 $r.Total++
@@ -1035,7 +1036,7 @@ function Invoke-DnsBenchmark {
             }
         }
     } finally {
-        Write-Progress -Id 4 -Activity 'Teste de DNS' -Completed
+        Write-Progress -Id 4 -Activity 'DNS test' -Completed
     }
 
     foreach ($r in $rows) {
@@ -1044,7 +1045,7 @@ function Invoke-DnsBenchmark {
         $r.FailPct   = if ($r.Total -gt 0) { [math]::Round(100.0 * $r.Fails / $r.Total, 1) } else { 100.0 }
     }
 
-    # Pontuação: 70% resposta habitual + 30% sem cache. Só contam servidores fiáveis (até 10% de falhas).
+    # Score: 70% usual response + 30% uncached. Only reliable servers count (up to 10% failures).
     foreach ($r in $rows) {
         if ($null -ne $r.Median) {
             $unc = if ($null -ne $r.UncMedian) { $r.UncMedian } else { $r.Median }
@@ -1053,38 +1054,38 @@ function Invoke-DnsBenchmark {
     }
     $valid = @($rows | Where-Object { $null -ne $_.Score -and $_.FailPct -le 10 })
 
-    # Candidatos = só DNS públicos (incluindo o atual, se já for um deles). O router / rede local não
-    # pode ganhar: responde da cache dele em ~1 ms, mas isso não é comparável com um DNS a sério.
+    # Candidates = public DNS only (including the current one, if it already is one). The router / local
+    # network cannot win: it answers from its cache in ~1 ms, which is not comparable with a real DNS.
     $cands = @($valid | Where-Object { $_.Preset })
     $winner = $null
     $margin = 5
     if ($cands.Count -gt 0) {
         $bestScore = ($cands | Measure-Object -Property Score -Minimum).Minimum
-        # Abaixo de 5 ms (ou 20%) a diferença é ruído: o mesmo servidor varia isso de um teste para outro.
+        # Below 5 ms (or 20%) the difference is noise: the same server varies that much between runs.
         $margin = [math]::Max(5, 0.2 * $bestScore)
-        # Em empate prefere Cloudflare, depois Google (o Quad9 e o OpenDNS filtram domínios).
+        # On a tie prefer Cloudflare, then Google (Quad9 and OpenDNS filter domains).
         foreach ($pref in @('Cloudflare', 'Google', 'Quad9', 'OpenDNS')) {
             $w = $cands | Where-Object { $_.Preset -eq $pref -and $_.Score -le $bestScore + $margin } | Select-Object -First 1
             if ($w) { $winner = $w; break }
         }
     }
 
-    # Tabela
+    # Table
     Write-Host ''
     Write-Seg '  '
-    Write-Seg 'DNS'.PadRight(20) DarkGray
-    Write-Seg 'Servidor'.PadRight(17) DarkGray
-    Write-Seg 'Mediana'.PadLeft(8) DarkGray
-    Write-Seg 'Sem cache'.PadLeft(11) DarkGray
-    Write-Host 'Falhas'.PadLeft(8) -ForegroundColor DarkGray
-    Write-Host ('  ' + ($G.H * 82)) -ForegroundColor DarkGray
+    Write-Seg 'DNS'.PadRight(22) DarkGray
+    Write-Seg 'Server'.PadRight(17) DarkGray
+    Write-Seg 'Median'.PadLeft(8) DarkGray
+    Write-Seg 'Uncached'.PadLeft(11) DarkGray
+    Write-Host 'Fails'.PadLeft(8) -ForegroundColor DarkGray
+    Write-Host ('  ' + ($G.H * 84)) -ForegroundColor DarkGray
     foreach ($r in $rows) {
-        Write-Seg ('  ' + (Format-Fit $r.Label 20)) $(if ($r.IsCurrent) { 'Cyan' } else { 'White' })
+        Write-Seg ('  ' + (Format-Fit $r.Label 22)) $(if ($r.IsCurrent) { 'Cyan' } else { 'White' })
         Write-Seg (Format-Fit $r.Ip 17) DarkGray
         if ($null -eq $r.Median) {
             Write-Seg ('-'.PadLeft(8) + '-'.PadLeft(11)) DarkGray
             Write-Seg '100%'.PadLeft(8) Red
-            Write-Host "    $($G.Bad) não responde" -ForegroundColor Red
+            Write-Host "    $($G.Bad) no response" -ForegroundColor Red
             continue
         }
         $gMed = Get-Grade $r.Median 20 50
@@ -1093,76 +1094,76 @@ function Invoke-DnsBenchmark {
         Write-Seg (Format-Num $r.Median).PadLeft(8) $StateColor[$gMed]
         Write-Seg (Format-Num $r.UncMedian).PadLeft(11) $StateColor[$gUnc]
         Write-Seg ((Format-Num $r.FailPct) + '%').PadLeft(8) $StateColor[$gFail]
-        if ($winner -and $r.Ip -eq $winner.Ip) { Write-Host "    $($G.Star) o melhor" -ForegroundColor Green }
-        elseif ($r.IsLocal) { Write-Host '    cache local, não conta' -ForegroundColor DarkGray }
+        if ($winner -and $r.Ip -eq $winner.Ip) { Write-Host "    $($G.Star) best" -ForegroundColor Green }
+        elseif ($r.IsLocal) { Write-Host '    local cache, ignored' -ForegroundColor DarkGray }
         else { Write-Host '' }
     }
     Write-Host ''
-    Write-Host '  Mediana = resposta habitual (com cache)  ·  Sem cache = primeira vez que um nome é pedido' -ForegroundColor DarkGray
-    Write-Host '  Escolha: 70% mediana + 30% sem cache. Em empate (até 5 ms) prefere Cloudflare, depois Google.' -ForegroundColor DarkGray
+    Write-Host "  Median = usual response (cached)  $($G.Dot)  Uncached = first time a name is requested" -ForegroundColor DarkGray
+    Write-Host '  Choice: 70% median + 30% uncached. On a tie (up to 5 ms) prefers Cloudflare, then Google.' -ForegroundColor DarkGray
 
-    # Decisão
+    # Decision
     $choice = $null
     $curLocal  = @($rows | Where-Object { $_.IsCurrent -and $_.IsLocal })
     $curPreset = @($valid | Where-Object { $_.IsCurrent -and $_.Preset }) | Sort-Object Score | Select-Object -First 1
     $publicRows = @($rows | Where-Object { $_.Preset })
     Write-Host ''
     if (-not $winner -and $publicRows.Count -gt 0 -and @($publicRows | Where-Object { $_.Dead }).Count -eq $publicRows.Count) {
-        Write-Warn2 'Os DNS públicos não respondem nesta rede: a porta 53 deve estar bloqueada (comum em redes de escola ou empresa).'
-        Write-Info  'Fica o DNS atual. Mudar agora cortava-te a internet.' 4
+        Write-Warn2 'Public DNS servers do not respond on this network: port 53 is probably blocked (common on school or office networks).'
+        Write-Info  'Keeping the current DNS. Changing it now would cut your internet.' 4
     } elseif (-not $winner) {
-        Write-Warn2 'Nenhum DNS público respondeu bem (falhas a mais). Fica o atual.'
+        Write-Warn2 'No public DNS answered reliably (too many failures). Keeping the current one.'
     } elseif ($winner.IsCurrent) {
-        Write-Ok "Já usas $($winner.Preset), que é o melhor aqui. Fica como está."
+        Write-Ok "You already use $($winner.Preset), the best one here. Leaving it as is."
     } elseif ($curPreset -and $curPreset.Score - $winner.Score -lt $margin) {
-        # Já usa um DNS público e a diferença é pequena: não vale a pena trocar entre públicos.
-        Write-Ok "Já usas $($curPreset.Preset) e $($winner.Preset) só é $(Format-Num ($curPreset.Score - $winner.Score)) ms melhor. Fica como está."
+        # Already on a public DNS and the difference is small: not worth switching between public ones.
+        Write-Ok "You already use $($curPreset.Preset) and $($winner.Preset) is only $(Format-Num ($curPreset.Score - $winner.Score)) ms better. Leaving it as is."
     } else {
         $choice = $winner.Preset
         if ($curLocal.Count -gt 0) {
             $l = $curLocal[0]
-            $uncText = if ($null -ne $l.UncMedian) { "$(Format-Num $l.UncMedian) ms" } else { 'sem resposta' }
-            Write-Info "O DNS atual ($($l.Ip)) é o router / rede local: só reencaminha para o DNS da operadora."
-            Write-Info "A mediana baixa dele é cache local; num nome novo demorou $uncText (o $($winner.Preset) demorou $(Format-Num $winner.UncMedian) ms)." 4
+            $uncText = if ($null -ne $l.UncMedian) { "$(Format-Num $l.UncMedian) ms" } else { 'no response' }
+            Write-Info "The current DNS ($($l.Ip)) is the router / local network: it only forwards to your ISP's DNS."
+            Write-Info "Its low median is local cache; a new name took $uncText ($($winner.Preset) took $(Format-Num $winner.UncMedian) ms)." 4
         }
-        Write-Warn2 "Melhor DNS: $($winner.Preset) (mediana $(Format-Num $winner.Median) ms, sem cache $(Format-Num $winner.UncMedian) ms)."
+        Write-Warn2 "Best DNS: $($winner.Preset) (median $(Format-Num $winner.Median) ms, uncached $(Format-Num $winner.UncMedian) ms)."
         $v4 = @($DnsPresets[$choice] | Where-Object { $_ -notmatch ':' }) -join ', '
         $v6 = @($DnsPresets[$choice] | Where-Object { $_ -match ':' }) -join ', '
-        Write-Info "O Apply define em cada placa  IPv4: $v4" 4
-        Write-Host "                                    IPv6: $v6" -ForegroundColor Gray
+        Write-Info "Apply sets on every adapter  IPv4: $v4" 4
+        Write-Host "                                   IPv6: $v6" -ForegroundColor Gray
     }
-    Write-Info 'Nota: o DNS acelera abrir sites e ligar aos serviços. Não muda o ping dentro do jogo.'
+    Write-Info 'Note: DNS speeds up opening sites and connecting to services. It does not change in-game ping.'
 
     return [pscustomobject]@{ Choice = $choice }
 }
 
-# ---------------------------------------------------------------- estado das placas
+# ---------------------------------------------------------------- adapter state
 
 function Show-AdapterState {
-    # Mostra o estado e devolve quantos ajustes o Apply ainda faria.
-    Write-Title 'Estado atual'
+    # Shows the state and returns how many tweaks Apply would still make.
+    Write-Title 'Current state'
     $pending = 0
 
     $wifiPlan = Get-WifiPowerPlan
     if ($wifiPlan) {
         Write-Seg "  $($G.Node) " Cyan
-        Write-Host 'Plano de energia do Windows' -ForegroundColor White
-        foreach ($pair in @(@('Wi-Fi ligado à corrente', $wifiPlan.AC), @('Wi-Fi na bateria', $wifiPlan.DC))) {
+        Write-Host 'Windows power plan' -ForegroundColor White
+        foreach ($pair in @(@('Wi-Fi when plugged in', $wifiPlan.AC), @('Wi-Fi on battery', $wifiPlan.DC))) {
             if ($pair[1] -eq 0) {
                 Write-KV $pair[0] (Format-WifiPower $pair[1]) 'ok'
             } else {
-                Write-KV $pair[0] (Format-WifiPower $pair[1]) 'warn' 'Desempenho máximo'
+                Write-KV $pair[0] (Format-WifiPower $pair[1]) 'warn' 'Maximum performance'
                 $pending++
             }
         }
     }
 
     $adapters = @(Get-TargetAdapters)
-    if ($adapters.Count -eq 0) { Write-Warn2 'Nenhuma placa física encontrada.'; return $pending }
+    if ($adapters.Count -eq 0) { Write-Warn2 'No physical adapter found.'; return $pending }
 
     foreach ($a in $adapters) {
         Write-AdapterHeader $a
-        if ([string]$a.Status -eq 'Up') { Write-KV 'Velocidade' ([string]$a.LinkSpeed) }
+        if ([string]$a.Status -eq 'Up') { Write-KV 'Speed' ([string]$a.LinkSpeed) }
         Write-KV 'Driver' ("{0} ({1})" -f $a.DriverVersion, $a.DriverDate)
 
         $classKey = Get-AdapterClassKey ([string]$a.InterfaceGuid)
@@ -1170,9 +1171,9 @@ function Show-AdapterState {
             try {
                 $pnp = Get-PnPCapabilities $classKey.PSPath
                 if ($pnp -eq $PnPCapOff) {
-                    Write-KV 'Windows pode desligá-la' (Format-PnPCap $pnp) 'ok'
+                    Write-KV 'Windows may turn it off' (Format-PnPCap $pnp) 'ok'
                 } else {
-                    Write-KV 'Windows pode desligá-la' (Format-PnPCap $pnp) 'warn' 'não'
+                    Write-KV 'Windows may turn it off' (Format-PnPCap $pnp) 'warn' 'no'
                     $pending++
                 }
             } catch { }
@@ -1181,10 +1182,10 @@ function Show-AdapterState {
         try {
             $rsc = Get-NetAdapterRsc -Name $a.Name -ErrorAction Stop
             if ($rsc.IPv4Enabled -or $rsc.IPv6Enabled) {
-                Write-KV 'RSC' ("ligado (IPv4 {0}, IPv6 {1})" -f $rsc.IPv4Enabled, $rsc.IPv6Enabled) 'warn' 'desligado'
+                Write-KV 'RSC' ("on (IPv4 {0}, IPv6 {1})" -f $rsc.IPv4Enabled, $rsc.IPv6Enabled) 'warn' 'off'
                 $pending++
             } else {
-                Write-KV 'RSC' 'desligado' 'ok'
+                Write-KV 'RSC' 'off' 'ok'
             }
         } catch { }
 
@@ -1214,8 +1215,8 @@ function Show-AdapterState {
     }
 
     Write-Host ''
-    Write-Seg '  '; Write-Seg "$($G.Ok) já otimizado" Green; Write-Seg '   '
-    Write-Seg "$($G.Warn) o Apply muda" Yellow; Write-Host "   $($G.Arrow) valor novo" -ForegroundColor DarkGray
+    Write-Seg '  '; Write-Seg "$($G.Ok) already optimized" Green; Write-Seg '   '
+    Write-Seg "$($G.Warn) Apply changes it" Yellow; Write-Host "   $($G.Arrow) new value" -ForegroundColor DarkGray
     return $pending
 }
 
@@ -1243,17 +1244,17 @@ function Invoke-Apply {
     Assert-Admin
 
     $before = $null
-    if (-not $SkipTest) { $before = Invoke-NetTest 'Teste antes dos ajustes' }
+    if (-not $SkipTest) { $before = Invoke-NetTest 'Test before the tweaks' }
 
     [void](Show-AdapterState)
 
-    # DNS: Auto = testar e usar o mais rápido (se valer a pena); Keep = não mexer; nome = forçar esse.
+    # DNS: Auto = test and use the fastest (if worth it); Keep = do not touch; a name = force that one.
     $dnsChoice = $null
     switch ($Dns) {
         'Keep'  { }
         'Auto'  { $dnsChoice = (Invoke-DnsBenchmark).Choice }
         default {
-            # Forçado: confirmar primeiro que esse DNS responde nesta rede (há redes que bloqueiam DNS externo).
+            # Forced: first check that this DNS answers on this network (some networks block external DNS).
             $okCount = 0
             foreach ($d in @('google.com', 'microsoft.com', 'cloudflare.com')) {
                 $res = Measure-DnsQuery $DnsPresets[$Dns][0] $d
@@ -1263,13 +1264,13 @@ function Invoke-Apply {
                 $dnsChoice = $Dns
             } else {
                 Write-Host ''
-                Write-Warn2 "O DNS $Dns ($($DnsPresets[$Dns][0])) não responde nesta rede. Não vou mudar o DNS, senão ficavas sem internet."
+                Write-Warn2 "The $Dns DNS ($($DnsPresets[$Dns][0])) does not answer on this network. Not changing DNS, or you would lose internet."
             }
         }
     }
 
     $adapters = @(Get-TargetAdapters)
-    if ($adapters.Count -eq 0) { throw 'Nenhuma placa física encontrada.' }
+    if ($adapters.Count -eq 0) { throw 'No physical adapter found.' }
 
     $backup = [ordered]@{
         Created  = (Get-Date).ToString('s')
@@ -1279,26 +1280,26 @@ function Invoke-Apply {
         Adapters = @()
     }
 
-    Write-Title 'A aplicar ajustes'
+    Write-Title 'Applying tweaks'
     $file = $null
 
-    # O backup é guardado no finally: se algum ajuste der erro a meio, o que já foi mudado fica registado.
+    # The backup is saved in the finally block: if a tweak fails halfway, what was already changed is recorded.
     try {
 
-    # 0) Poupança de energia do Wi-Fi no plano de energia do Windows (AC e bateria)
+    # 0) Wi-Fi power saving in the Windows power plan (plugged in and on battery)
     $wifiPlan = Get-WifiPowerPlan
     if ($wifiPlan) {
         Write-Seg "  $($G.Node) " Cyan
-        Write-Host 'Plano de energia do Windows' -ForegroundColor White
+        Write-Host 'Windows power plan' -ForegroundColor White
         if ($wifiPlan.AC -ne 0 -or $wifiPlan.DC -ne 0) {
             $backup.WifiPowerPlan = [ordered]@{ Scheme = $wifiPlan.Scheme; AC = $wifiPlan.AC; DC = $wifiPlan.DC }
-            $from = "corrente: $(Format-WifiPower $wifiPlan.AC), bateria: $(Format-WifiPower $wifiPlan.DC)"
-            if ($PSCmdlet.ShouldProcess('Plano de energia', "Poupança do Wi-Fi: $from -> Desempenho máximo")) {
+            $from = "plugged in: $(Format-WifiPower $wifiPlan.AC), battery: $(Format-WifiPower $wifiPlan.DC)"
+            if ($PSCmdlet.ShouldProcess('Power plan', "Wi-Fi power saving: $from -> Maximum performance")) {
                 Set-WifiPowerPlan -Scheme $wifiPlan.Scheme -AC 0 -DC 0
             }
-            Write-Change 'Poupança do Wi-Fi' $from 'Desempenho máximo'
+            Write-Change 'Wi-Fi power saving' $from 'Maximum performance'
         } else {
-            Write-Info 'Poupança do Wi-Fi: já em desempenho máximo' 4
+            Write-Info 'Wi-Fi power saving: already at maximum performance' 4
         }
     }
 
@@ -1314,49 +1315,49 @@ function Invoke-Apply {
             Advanced             = @()
             Dns                  = $null
         }
-        # Entra já no backup (é uma referência, as alterações abaixo ficam lá).
+        # Goes into the backup right away (it is a reference, the changes below end up there).
         $backup.Adapters += $entry
         $changed = $false
 
-        # 1) Deixar o Windows desligar a placa para poupar energia
-        #    -> PnPCapabilities = 24 na chave da placa (só faz efeito depois de reiniciar o PC)
+        # 1) Let Windows turn the adapter off to save power
+        #    -> PnPCapabilities = 24 in the adapter's key (only takes effect after a PC restart)
         $classKey = Get-AdapterClassKey ([string]$a.InterfaceGuid)
         if (-not $classKey) {
-            Write-Warn2 "Gestão de energia: não encontrei a chave da placa no registo (NetCfgInstanceId = $($a.InterfaceGuid))" 4
+            Write-Warn2 "Power management: could not find the adapter's registry key (NetCfgInstanceId = $($a.InterfaceGuid))" 4
         } else {
             $old = $null
             $readOk = $true
             try { $old = Get-PnPCapabilities $classKey.PSPath } catch {
                 $readOk = $false
-                Write-Warn2 "Gestão de energia: não consegui ler PnPCapabilities: $($_.Exception.Message)" 4
+                Write-Warn2 "Power management: could not read PnPCapabilities: $($_.Exception.Message)" 4
             }
             if ($readOk -and $old -eq $PnPCapOff) {
-                Write-Info "Windows pode desligá-la: já está em não (PnPCapabilities = $PnPCapOff)" 4
+                Write-Info "Windows may turn it off: already no (PnPCapabilities = $PnPCapOff)" 4
             } elseif ($readOk) {
                 $existed = ($null -ne $old)
                 $entry.PnPCapabilities = [ordered]@{ ClassKey = $classKey.PSChildName; Existed = $existed; Value = $old }
-                $oldText = if ($existed) { [string]$old } else { 'não existia' }
-                $msg = "PnPCapabilities (chave $($classKey.PSChildName)): $oldText -> $PnPCapOff"
+                $oldText = if ($existed) { [string]$old } else { 'not set' }
+                $msg = "PnPCapabilities (key $($classKey.PSChildName)): $oldText -> $PnPCapOff"
                 if ($PSCmdlet.ShouldProcess($a.Name, $msg)) {
                     try {
                         New-ItemProperty -Path $classKey.PSPath -Name PnPCapabilities -PropertyType DWord -Value $PnPCapOff -Force -ErrorAction Stop | Out-Null
                     } catch {
-                        Write-Warn2 "Gestão de energia: falhou ao escrever PnPCapabilities: $($_.Exception.Message)" 4
+                        Write-Warn2 "Power management: failed to write PnPCapabilities: $($_.Exception.Message)" 4
                     }
 
-                    # Confirmar lendo outra vez: só dizemos OK se ficou mesmo 24.
+                    # Confirm by reading it back: only report OK if it really is 24.
                     $now = $null
                     try { $now = Get-PnPCapabilities $classKey.PSPath } catch {
-                        Write-Warn2 "Gestão de energia: não consegui confirmar o valor: $($_.Exception.Message)" 4
+                        Write-Warn2 "Power management: could not confirm the value: $($_.Exception.Message)" 4
                     }
                     if ($now -eq $PnPCapOff) {
-                        Write-Change 'Windows pode desligá-la' (Format-PnPCap $old) (Format-PnPCap $now) 'reinicia o PC'
+                        Write-Change 'Windows may turn it off' (Format-PnPCap $old) (Format-PnPCap $now) 'restart the PC'
                         $script:RebootNeeded = $true
                     } else {
-                        Write-Warn2 "Gestão de energia: PnPCapabilities ficou '$(Format-PnPCap $now)' (esperado $PnPCapOff)" 4
+                        Write-Warn2 "Power management: PnPCapabilities ended up as '$(Format-PnPCap $now)' (expected $PnPCapOff)" 4
                     }
                 } else {
-                    Write-Change 'Windows pode desligá-la' (Format-PnPCap $old) (Format-PnPCap $PnPCapOff) 'reinicia o PC'
+                    Write-Change 'Windows may turn it off' (Format-PnPCap $old) (Format-PnPCap $PnPCapOff) 'restart the PC'
                 }
             }
         }
@@ -1366,19 +1367,19 @@ function Invoke-Apply {
             $rsc = Get-NetAdapterRsc -Name $a.Name -ErrorAction Stop
             if ($rsc.IPv4Enabled -or $rsc.IPv6Enabled) {
                 $entry.Rsc = [ordered]@{ IPv4 = [bool]$rsc.IPv4Enabled; IPv6 = [bool]$rsc.IPv6Enabled }
-                if ($PSCmdlet.ShouldProcess($a.Name, 'Desligar RSC')) {
+                if ($PSCmdlet.ShouldProcess($a.Name, 'Disable RSC')) {
                     Disable-NetAdapterRsc -Name $a.Name -NoRestart -ErrorAction Stop
                     $changed = $true
                 }
-                Write-Change 'RSC' 'ligado' 'desligado'
+                Write-Change 'RSC' 'on' 'off'
             } else {
-                Write-Info 'RSC: já desligado' 4
+                Write-Info 'RSC: already off' 4
             }
         } catch {
-            Write-Info 'RSC: não suportado por esta placa' 4
+            Write-Info 'RSC: not supported by this adapter' 4
         }
 
-        # 3) Propriedades avançadas do driver
+        # 3) Driver advanced properties
         $props = @(Get-NetAdapterAdvancedProperty -Name $a.Name -ErrorAction SilentlyContinue)
         foreach ($p in $props) {
             $rule = $null
@@ -1389,11 +1390,11 @@ function Invoke-Apply {
             if ($valid.Count -eq 0) { continue }
             $target = $valid | Where-Object { $_ -match $rule.Want } | Select-Object -First 1
             if (-not $target) {
-                Write-Warn2 "$($p.DisplayName): não encontrei valor para desligar (opções: $($valid -join ' | '))" 4
+                Write-Warn2 "$($p.DisplayName): could not find an 'off' value (options: $($valid -join ' | '))" 4
                 continue
             }
             if ($p.DisplayValue -eq $target) {
-                Write-Info "$($p.DisplayName): já está em '$target'" 4
+                Write-Info "$($p.DisplayName): already '$target'" 4
                 continue
             }
 
@@ -1410,7 +1411,7 @@ function Invoke-Apply {
             Write-Change $p.DisplayName $p.DisplayValue $target
         }
 
-        # 4) DNS: IPv4 e IPv6 definidos à mão, cada família em separado, e confirmados lendo outra vez.
+        # 4) DNS: IPv4 and IPv6 set by hand, each family separately, and confirmed by reading them back.
         if ($dnsChoice) {
             $want4 = @($DnsPresets[$dnsChoice] | Where-Object { $_ -notmatch ':' })
             $want6 = @($DnsPresets[$dnsChoice] | Where-Object { $_ -match ':' })
@@ -1422,37 +1423,37 @@ function Invoke-Apply {
             $need4 = -not (Test-SameList $now4 $want4)
             $need6 = $v6On -and -not (Test-SameList $now6 $want6)
             if (-not $need4 -and -not $need6) {
-                Write-Info "DNS: já está em $dnsChoice" 4
+                Write-Info "DNS: already $dnsChoice" 4
             } else {
                 $entry.Dns = Get-DnsBackup $a
                 foreach ($fam in @(@('IPv4', $need4, $now4, $want4), @('IPv6', $need6, $now6, $want6))) {
                     if (-not $fam[1]) { continue }
-                    $from = if (@($fam[2]).Count -gt 0) { (@($fam[2]) | Select-Object -First 2) -join ', ' } else { 'automático' }
+                    $from = if (@($fam[2]).Count -gt 0) { (@($fam[2]) | Select-Object -First 2) -join ', ' } else { 'automatic' }
                     $to = "$dnsChoice (" + (@($fam[3]) -join ', ') + ')'
                     if ($PSCmdlet.ShouldProcess($a.Name, "DNS $($fam[0]) -> $to")) {
                         $after = @(Set-AdapterDnsFamily $a $fam[0] @($fam[3]))
                         if (Test-SameList $after @($fam[3])) {
                             Write-Change "DNS $($fam[0])" $from $to
                         } else {
-                            $got = if ($after.Count -gt 0) { $after -join ', ' } else { 'automático' }
-                            Write-Warn2 "DNS $($fam[0]): não ficou aplicado (está: $got)" 4
+                            $got = if ($after.Count -gt 0) { $after -join ', ' } else { 'automatic' }
+                            Write-Warn2 "DNS $($fam[0]): was not applied (now: $got)" 4
                         }
                     } else {
                         Write-Change "DNS $($fam[0])" $from $to
                     }
                 }
             }
-            if (-not $v6On) { Write-Info 'DNS IPv6: o IPv6 está desligado nesta placa, só foi preciso o IPv4.' 4 }
+            if (-not $v6On) { Write-Info 'DNS IPv6: IPv6 is disabled on this adapter, only IPv4 was needed.' 4 }
         }
 
-        # Reiniciar a placa uma vez só, para aplicar tudo
+        # Restart the adapter only once, to apply everything
         if ($changed -and $a.Status -eq 'Up') {
-            if ($PSCmdlet.ShouldProcess($a.Name, 'Reiniciar a placa para aplicar')) {
-                Write-Info 'A reiniciar a placa (a ligação cai uns segundos)...' 4
+            if ($PSCmdlet.ShouldProcess($a.Name, 'Restart the adapter to apply')) {
+                Write-Info 'Restarting the adapter (the connection drops for a few seconds)...' 4
                 Restart-NetAdapter -Name $a.Name -Confirm:$false -ErrorAction SilentlyContinue
             }
         } elseif ($changed) {
-            Write-Info 'Placa sem ligação: as mudanças aplicam-se quando a ligares.' 4
+            Write-Info 'Adapter disconnected: the changes apply when you connect it.' 4
         }
     }
 
@@ -1460,46 +1461,46 @@ function Invoke-Apply {
         if (-not $WhatIfPreference) {
             $file = Save-Backup $backup
             Write-Host ''
-            Write-Ok "Backup guardado: backups\$(Split-Path $file -Leaf)"
+            Write-Ok "Backup saved: backups\$(Split-Path $file -Leaf)"
         }
     }
 
     if ($WhatIfPreference) {
         $n = $script:ChangeCount
         $lines = @()
-        if ($n -gt 0) { $lines += ,@($G.Sim, 'Cyan', "$n alteração(ões) seriam aplicadas") }
-        else          { $lines += ,@($G.Ok, 'Green', 'Nada a mudar: já está tudo otimizado') }
-        $lines += ,@($G.Info, 'DarkGray', 'Nada foi mudado (-WhatIf).')
-        $lines += ,@($G.Arrow, 'Cyan', 'Para aplicar: .\NetTune.ps1 -Mode Apply')
-        Write-Box 'Simulação' $lines 'DarkYellow'
+        if ($n -gt 0) { $lines += ,@($G.Sim, 'Cyan', "$n change(s) would be applied") }
+        else          { $lines += ,@($G.Ok, 'Green', 'Nothing to change: everything is already optimized') }
+        $lines += ,@($G.Info, 'DarkGray', 'Nothing was changed (-WhatIf).')
+        $lines += ,@($G.Arrow, 'Cyan', 'To apply: .\NetTune.ps1 -Mode Apply')
+        Write-Box 'Simulation' $lines 'DarkYellow'
         return
     }
 
     if ($dnsChoice) { Clear-DnsClientCache -ErrorAction SilentlyContinue }
 
     Write-Host ''
-    Write-Info 'À espera que a rede volte...'
-    if (-not (Wait-Network 40)) { Write-Warn2 'A rede demorou a voltar. Verifica a ligação antes do teste.' }
+    Write-Info 'Waiting for the network to come back...'
+    if (-not (Wait-Network 40)) { Write-Warn2 'The network took a while to come back. Check the connection before the test.' }
     Start-Sleep -Seconds 3
 
     if (-not $SkipTest) {
-        $after = Invoke-NetTest 'Teste depois dos ajustes'
+        $after = Invoke-NetTest 'Test after the tweaks'
         if ($before) { Show-Comparison $before $after }
     }
 
     $n = $script:ChangeCount
     $lines = @()
-    if ($n -gt 0) { $lines += ,@($G.Ok, 'Green', "$n alteração(ões) aplicada(s)") }
-    else          { $lines += ,@($G.Ok, 'Green', 'Nada a mudar: já estava tudo otimizado') }
+    if ($n -gt 0) { $lines += ,@($G.Ok, 'Green', "$n change(s) applied") }
+    else          { $lines += ,@($G.Ok, 'Green', 'Nothing to change: everything was already optimized') }
     if ($file)    { $lines += ,@($G.Info, 'DarkGray', "Backup: backups\$(Split-Path $file -Leaf)") }
-    $lines += ,@($G.Arrow, 'Cyan', 'Para desfazer: .\NetTune.ps1 -Mode Revert')
+    $lines += ,@($G.Arrow, 'Cyan', 'To undo: .\NetTune.ps1 -Mode Revert')
     if ($script:RebootNeeded) {
-        $lines += ,@($G.Warn, 'Yellow', 'REINICIA O PC para a gestão de energia fazer efeito.')
-        $lines += ,@(' ', 'Gray', 'O teste "depois" ainda não inclui essa mudança.')
+        $lines += ,@($G.Warn, 'Yellow', 'RESTART THE PC for the power management change to take effect.')
+        $lines += ,@(' ', 'Gray', 'The "after" test does not include that change yet.')
     }
-    $lines += ,@($G.Info, 'DarkGray', 'Updates do driver podem repor os valores de fábrica.')
-    $lines += ,@(' ', 'Gray', 'Se os picos voltarem, corre o Apply outra vez.')
-    Write-Box 'Concluído' $lines 'DarkGreen'
+    $lines += ,@($G.Info, 'DarkGray', 'Driver updates can restore the factory values.')
+    $lines += ,@(' ', 'Gray', 'If the spikes come back, run Apply again.')
+    Write-Box 'Done' $lines 'DarkGreen'
 }
 
 # ---------------------------------------------------------------- revert
@@ -1511,37 +1512,37 @@ function Invoke-Revert {
     if (-not $file) {
         $latest = Get-ChildItem -Path $BackupDir -Filter 'backup-*.json' -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if (-not $latest) { throw "Não há backups em $BackupDir" }
+        if (-not $latest) { throw "No backups in $BackupDir" }
         $file = $latest.FullName
     }
-    if (-not (Test-Path $file)) { throw "Backup não encontrado: $file" }
+    if (-not (Test-Path $file)) { throw "Backup not found: $file" }
 
-    Write-Title 'A repor backup'
+    Write-Title 'Restoring backup'
     $data = Get-Content -Path $file -Raw -Encoding UTF8 | ConvertFrom-Json
     $created = if ($data.PSObject.Properties['Created']) { $data.Created } else { '?' }
     $tool    = if ($data.PSObject.Properties['Tool'])    { $data.Tool }    else { '?' }
-    Write-Info "Ficheiro: $(Split-Path $file -Leaf)  $($G.Dot)  criado: $created  $($G.Dot)  $tool"
+    Write-Info "File: $(Split-Path $file -Leaf)  $($G.Dot)  created: $created  $($G.Dot)  $tool"
 
-    # Backups antigos (1.0.0) não têm esta propriedade; com StrictMode tem de se ver assim.
+    # Old backups (1.0.0) do not have this property; with StrictMode it has to be checked like this.
     $planProp = $data.PSObject.Properties['WifiPowerPlan']
     if ($planProp -and $planProp.Value) {
         $p = $planProp.Value
         Write-Host ''
         Write-Seg "  $($G.Node) " Cyan
-        Write-Host 'Plano de energia do Windows' -ForegroundColor White
-        $to = "corrente: $(Format-WifiPower $p.AC), bateria: $(Format-WifiPower $p.DC)"
-        if ($PSCmdlet.ShouldProcess('Plano de energia', "Poupança do Wi-Fi -> $to")) {
+        Write-Host 'Windows power plan' -ForegroundColor White
+        $to = "plugged in: $(Format-WifiPower $p.AC), battery: $(Format-WifiPower $p.DC)"
+        if ($PSCmdlet.ShouldProcess('Power plan', "Wi-Fi power saving -> $to")) {
             try {
                 Set-WifiPowerPlan -Scheme $p.Scheme -AC $p.AC -DC $p.DC
-                Write-Change 'Poupança do Wi-Fi' 'Desempenho máximo' $to
-            } catch { Write-Warn2 "Plano de energia: $($_.Exception.Message)" 4 }
+                Write-Change 'Wi-Fi power saving' 'Maximum performance' $to
+            } catch { Write-Warn2 "Power plan: $($_.Exception.Message)" 4 }
         }
     }
 
     foreach ($e in @($data.Adapters)) {
         $a = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { [string]$_.InterfaceGuid -eq $e.InterfaceGuid } | Select-Object -First 1
         if (-not $a) { $a = Get-NetAdapter -Name $e.Name -ErrorAction SilentlyContinue }
-        if (-not $a) { Write-Host ''; Write-Warn2 "Placa '$($e.Name)' não encontrada, a saltar."; continue }
+        if (-not $a) { Write-Host ''; Write-Warn2 "Adapter '$($e.Name)' not found, skipping."; continue }
 
         Write-AdapterHeader $a
         $changed = $false
@@ -1551,7 +1552,7 @@ function Invoke-Revert {
             if ($PSCmdlet.ShouldProcess($a.Name, "$($adv.DisplayName) -> '$($adv.DisplayValue)'")) {
                 try {
                     Set-NetAdapterAdvancedProperty -Name $a.Name -RegistryKeyword $adv.RegistryKeyword -RegistryValue @($adv.RegistryValue) -NoRestart -ErrorAction Stop
-                    Write-Change $adv.DisplayName 'ajustado' $adv.DisplayValue
+                    Write-Change $adv.DisplayName 'tweaked' $adv.DisplayValue
                     $changed = $true
                 } catch {
                     Write-Warn2 "$($adv.DisplayName): $($_.Exception.Message)" 4
@@ -1560,26 +1561,26 @@ function Invoke-Revert {
         }
 
         if ($e.Rsc) {
-            if ($PSCmdlet.ShouldProcess($a.Name, 'Repor RSC')) {
+            if ($PSCmdlet.ShouldProcess($a.Name, 'Restore RSC')) {
                 try {
                     if ($e.Rsc.IPv4) { Enable-NetAdapterRsc -Name $a.Name -IPv4 -NoRestart -ErrorAction Stop }
                     if ($e.Rsc.IPv6) { Enable-NetAdapterRsc -Name $a.Name -IPv6 -NoRestart -ErrorAction Stop }
-                    Write-Change 'RSC' 'desligado' 'ligado'
+                    Write-Change 'RSC' 'off' 'on'
                     $changed = $true
                 } catch { Write-Warn2 "RSC: $($_.Exception.Message)" 4 }
             }
         }
 
-        # Gestão de energia: PnPCapabilities. Backups antigos (PowerManagement) são ignorados de propósito:
-        # essa versão nunca conseguiu mudar nada (o Set-NetAdapterPowerManagement não tem esse parâmetro).
+        # Power management: PnPCapabilities. Old backups (PowerManagement) are ignored on purpose:
+        # that version never managed to change anything (Set-NetAdapterPowerManagement has no such parameter).
         $pnpProp = $e.PSObject.Properties['PnPCapabilities']
         if ($pnpProp -and $pnpProp.Value) {
             $pc = $pnpProp.Value
             $classKey = Get-AdapterClassKey ([string]$a.InterfaceGuid)
             if (-not $classKey) {
-                Write-Warn2 "Gestão de energia: não encontrei a chave da placa no registo (era a $($pc.ClassKey))" 4
+                Write-Warn2 "Power management: could not find the adapter's registry key (it was $($pc.ClassKey))" 4
             } else {
-                $desc = if ($pc.Existed) { "PnPCapabilities (chave $($classKey.PSChildName)) -> $($pc.Value)" } else { "PnPCapabilities (chave $($classKey.PSChildName)) -> apagar (não existia)" }
+                $desc = if ($pc.Existed) { "PnPCapabilities (key $($classKey.PSChildName)) -> $($pc.Value)" } else { "PnPCapabilities (key $($classKey.PSChildName)) -> delete (was not set)" }
                 if ($PSCmdlet.ShouldProcess($a.Name, $desc)) {
                     try {
                         if ($pc.Existed) {
@@ -1588,34 +1589,34 @@ function Invoke-Revert {
                             Remove-ItemProperty -Path $classKey.PSPath -Name PnPCapabilities -ErrorAction Stop
                         }
                         $restored = if ($pc.Existed) { $pc.Value } else { $null }
-                        Write-Change 'Windows pode desligá-la' (Format-PnPCap $PnPCapOff) (Format-PnPCap $restored) 'reinicia o PC'
+                        Write-Change 'Windows may turn it off' (Format-PnPCap $PnPCapOff) (Format-PnPCap $restored) 'restart the PC'
                         $script:RebootNeeded = $true
-                    } catch { Write-Warn2 "Gestão de energia: $($_.Exception.Message)" 4 }
+                    } catch { Write-Warn2 "Power management: $($_.Exception.Message)" 4 }
                 }
             }
         }
 
         if ($e.Dns) {
-            # Cada família volta ao que era: a lista fixa antiga, ou automático (DHCP) se não havia nenhuma.
+            # Each family goes back to what it was: the old static list, or automatic (DHCP) if there was none.
             $old4 = @(([string]$e.Dns.IPv4) -split '[,\s]+' | Where-Object { $_ })
             $old6 = @(([string]$e.Dns.IPv6) -split '[,\s]+' | Where-Object { $_ })
             foreach ($fam in @(@('IPv4', $old4), @('IPv6', $old6))) {
-                $to = if (@($fam[1]).Count -gt 0) { @($fam[1]) -join ', ' } else { 'automático (DHCP)' }
+                $to = if (@($fam[1]).Count -gt 0) { @($fam[1]) -join ', ' } else { 'automatic (DHCP)' }
                 if ($PSCmdlet.ShouldProcess($a.Name, "DNS $($fam[0]) -> $to")) {
                     try {
                         $after = @(Set-AdapterDnsFamily $a $fam[0] @($fam[1]))
                         if (@($fam[1]).Count -gt 0 -and -not (Test-SameList $after @($fam[1]))) {
-                            Write-Warn2 "DNS $($fam[0]): não ficou reposto (está: $($after -join ', '))" 4
+                            Write-Warn2 "DNS $($fam[0]): was not restored (now: $($after -join ', '))" 4
                         } else {
-                            Write-Change "DNS $($fam[0])" 'ajustado' $to
+                            Write-Change "DNS $($fam[0])" 'tweaked' $to
                         }
                     } catch { Write-Warn2 "DNS $($fam[0]): $($_.Exception.Message)" 4 }
                 }
             }
         }
 
-        if ($changed -and $a.Status -eq 'Up' -and $PSCmdlet.ShouldProcess($a.Name, 'Reiniciar a placa')) {
-            Write-Info 'A reiniciar a placa (a ligação cai uns segundos)...' 4
+        if ($changed -and $a.Status -eq 'Up' -and $PSCmdlet.ShouldProcess($a.Name, 'Restart the adapter')) {
+            Write-Info 'Restarting the adapter (the connection drops for a few seconds)...' 4
             Restart-NetAdapter -Name $a.Name -Confirm:$false -ErrorAction SilentlyContinue
         }
     }
@@ -1623,24 +1624,24 @@ function Invoke-Revert {
     Clear-DnsClientCache -ErrorAction SilentlyContinue
     if (-not $WhatIfPreference) {
         Write-Host ''
-        Write-Info 'À espera que a rede volte...'
+        Write-Info 'Waiting for the network to come back...'
         [void](Wait-Network 40)
     }
 
     $n = $script:ChangeCount
     $lines = @()
     if ($WhatIfPreference) {
-        $lines += ,@($G.Sim, 'Cyan', "$n definição(ões) seriam repostas")
-        $lines += ,@($G.Info, 'DarkGray', 'Nada foi mudado (-WhatIf).')
+        $lines += ,@($G.Sim, 'Cyan', "$n setting(s) would be restored")
+        $lines += ,@($G.Info, 'DarkGray', 'Nothing was changed (-WhatIf).')
     } elseif ($n -gt 0) {
-        $lines += ,@($G.Ok, 'Green', "$n definição(ões) reposta(s)")
+        $lines += ,@($G.Ok, 'Green', "$n setting(s) restored")
     } else {
-        $lines += ,@($G.Info, 'DarkGray', 'Este backup não tinha nada para repor.')
+        $lines += ,@($G.Info, 'DarkGray', 'This backup had nothing to restore.')
     }
     if ($script:RebootNeeded -and -not $WhatIfPreference) {
-        $lines += ,@($G.Warn, 'Yellow', 'REINICIA O PC para a gestão de energia voltar ao original.')
+        $lines += ,@($G.Warn, 'Yellow', 'RESTART THE PC for power management to go back to the original.')
     }
-    Write-Box 'Backup reposto' $lines 'DarkMagenta'
+    Write-Box 'Backup restored' $lines 'DarkMagenta'
 }
 
 # ---------------------------------------------------------------- main
@@ -1656,7 +1657,7 @@ try {
     switch ($Mode) {
         'Test' {
             $pending = Show-AdapterState
-            [void](Invoke-NetTest 'Teste de ligação')
+            [void](Invoke-NetTest 'Connection test')
             $dnsChoice = $null
             if ($Dns -ne 'Keep') {
                 $dnsChoice = (Invoke-DnsBenchmark).Choice
@@ -1664,23 +1665,23 @@ try {
             }
             $lines = @()
             if ($dnsChoice) {
-                $lines += ,@($G.Star, 'Green', "Melhor DNS: $dnsChoice (o Apply muda, IPv4 e IPv6)")
+                $lines += ,@($G.Star, 'Green', "Best DNS: $dnsChoice (Apply sets it, IPv4 and IPv6)")
             }
             if ($pending -gt 0) {
-                $lines += ,@($G.Warn, 'Yellow', "$pending ajuste(s) por fazer (marcados com $($G.Warn) acima)")
-                $lines += ,@($G.Arrow, 'Cyan', 'Ensaio:  .\NetTune.ps1 -Mode Apply -WhatIf')
-                $lines += ,@($G.Arrow, 'Cyan', 'Aplicar: .\NetTune.ps1 -Mode Apply   (como admin)')
+                $lines += ,@($G.Warn, 'Yellow', "$pending tweak(s) to do (marked with $($G.Warn) above)")
+                $lines += ,@($G.Arrow, 'Cyan', 'Dry run: .\NetTune.ps1 -Mode Apply -WhatIf')
+                $lines += ,@($G.Arrow, 'Cyan', 'Apply:   .\NetTune.ps1 -Mode Apply   (as admin)')
             } else {
-                $lines += ,@($G.Ok, 'Green', 'As placas já estão otimizadas. Nada a fazer.')
+                $lines += ,@($G.Ok, 'Green', 'The adapters are already optimized. Nothing to do.')
             }
-            Write-Box 'Resumo' $lines
+            Write-Box 'Summary' $lines
         }
         'Apply'  { Invoke-Apply }
         'Revert' { Invoke-Revert }
     }
 } catch {
     Write-Host ''
-    Write-Seg "  $($G.Bad) ERRO  " Red
+    Write-Seg "  $($G.Bad) ERROR  " Red
     Write-Host $_.Exception.Message -ForegroundColor White
     exit 1
 } finally {
@@ -1690,7 +1691,7 @@ try {
         try { Stop-Transcript -WhatIf:$false | Out-Null } catch { }
     }
     Write-Host ''
-    Write-Seg "  Terminado em $took" DarkGray
+    Write-Seg "  Finished in $took" DarkGray
     if ($transcript) { Write-Seg "  $($G.Dot)  log: logs\$(Split-Path $transcript -Leaf)" DarkGray }
     Write-Host ''
     Write-Host ''

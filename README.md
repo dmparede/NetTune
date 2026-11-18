@@ -1,153 +1,155 @@
 # NetTune
 
-Script PowerShell para Windows 10/11 que **mede** a tua ligação, aplica **só ajustes com efeito real** na latência e estabilidade, e volta a medir para mostrar a diferença. Guarda um backup antes de mudar seja o que for, por isso dá sempre para desfazer.
+PowerShell script for Windows 10/11 that **measures** your connection, applies **only tweaks with a real effect** on latency and stability, and measures again to show the difference. It saves a backup before changing anything, so you can always undo it.
 
-Nasceu de um caso real: um portátil com placa **MediaTek MT7925 (Wi-Fi 7)** tinha picos de 700 ms no Fortnite. O culpado era a poupança de energia e o roaming da placa. Depois dos ajustes, o ping ao router passou de **144 ms de média para 3 ms**.
+It started from a real case: a laptop with a **MediaTek MT7925 (Wi-Fi 7)** card had 700 ms spikes in Fortnite. The culprits were the card's power saving and roaming. After the tweaks, the ping to the router went from a **144 ms average to 3 ms**.
 
-## O que faz
+## What it does
 
-Em cada placa de rede física (Wi-Fi, Ethernet e adaptadores USB):
+On each physical network adapter (Wi-Fi, Ethernet and USB adapters):
 
-| Ajuste | Porquê |
+| Tweak | Why |
 |---|---|
-| Plano de energia → "Adaptador sem fios: modo de poupança de energia" → Desempenho máximo | Por defeito, na bateria o Windows põe o Wi-Fi em poupança média. Jogar sem carregador dá picos. |
-| "Permitir que o computador desligue este dispositivo" → desligado | O Windows deixa de pôr a placa a dormir. É feito com `PnPCapabilities = 24` na chave de registo da placa e **só faz efeito depois de reiniciar o PC**. |
-| Poupança de energia da placa (Power Saving) → desligada | A placa adormece entre pacotes e demora a acordar, o que dá picos. |
-| Agressividade de roaming → a mais baixa | A placa deixa de procurar outros pontos de acesso a meio do jogo (cada procura congela a ligação). |
-| Energy-Efficient Ethernet / Green Ethernet → desligado | Mesmo problema, mas no cabo. |
-| Suspensão seletiva USB → desligada | Para adaptadores Ethernet USB. |
-| RSC (Receive Segment Coalescing) → desligado | Junta pacotes para poupar CPU, o que é bom para downloads e mau para latência. |
-| DNS → **o mais rápido**, só se for claramente melhor | Testa o teu DNS atual contra Cloudflare, Google, Quad9 e OpenDNS e muda só se ganhar pelo menos 3 ms e 15% (ver abaixo). |
+| Power plan → "Wireless Adapter Settings: Power Saving Mode" → Maximum performance | By default, on battery Windows puts Wi-Fi in medium power saving. Gaming unplugged causes spikes. |
+| "Allow the computer to turn off this device" → off | Windows stops putting the adapter to sleep. Done with `PnPCapabilities = 24` in the adapter's registry key, and **only takes effect after a PC restart**. |
+| Adapter power saving (Power Saving) → off | The adapter sleeps between packets and is slow to wake up, which causes spikes. |
+| Roaming aggressiveness → lowest | The adapter stops scanning for other access points mid-game (each scan freezes the connection). |
+| Energy-Efficient Ethernet / Green Ethernet → off | Same problem, but on the cable. |
+| USB selective suspend → off | For USB Ethernet adapters. |
+| RSC (Receive Segment Coalescing) → off | Merges packets to save CPU, which is good for downloads and bad for latency. |
+| DNS → **the best public one**, only if it is clearly better | Tests Cloudflare, Google, Quad9 and OpenDNS and switches only when one clearly wins (see below). |
 
-Os nomes das opções variam conforme o driver e a língua do Windows. O script reconhece-os em inglês, português e espanhol.
+Option names vary with the driver and the Windows language. The script recognizes them in English, Portuguese and Spanish.
 
-## O que NÃO faz (de propósito)
+## What it does NOT do (on purpose)
 
-- **Tweaks de TCP** (Nagle, `TcpAckFrequency`, `TCPNoDelay`): os jogos usam UDP, por isso isto não muda nada no ping in-game.
-- **"NetworkThrottlingIndex" e outros tweaks de registo milagrosos**: não há prova de que melhorem o ping, e alguns pioram outras coisas.
-- **Prometer que o DNS baixa o ping**: o DNS só traduz nomes em IPs antes de ligar. Durante o jogo não entra. Mudar de DNS pode tornar os sites mais rápidos a abrir, mas não mexe no ping.
-- **Mexer em VPNs, placas virtuais ou Bluetooth**: são ignoradas.
+- **TCP tweaks** (Nagle, `TcpAckFrequency`, `TCPNoDelay`): games use UDP, so these change nothing for in-game ping.
+- **"NetworkThrottlingIndex" and other miracle registry tweaks**: there is no evidence they improve ping, and some make other things worse.
+- **Promise that DNS lowers ping**: DNS only turns names into IPs before connecting. It plays no part during the match. Changing DNS can make sites open faster, but it does not touch ping.
+- **Touch VPNs, virtual adapters or Bluetooth**: they are ignored.
 
-## Como usar
+## How to use
 
-Abre o **PowerShell como administrador** (o azul, Windows PowerShell 5.1) na pasta do script.
+Open **PowerShell as administrator** (the blue one, Windows PowerShell 5.1) in the script's folder.
 
 ```powershell
-# 1. Só medir e ver o estado das placas (não muda nada, não precisa de admin)
+# 1. Only measure and see the adapter state (changes nothing, no admin needed)
 powershell -ExecutionPolicy Bypass -File .\NetTune.ps1
 
-# 2. Ensaio: mostra o que seria mudado, sem mudar nada
+# 2. Dry run: shows what would be changed, without changing anything
 powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -WhatIf
 
-# 3. Aplicar (mede antes, faz backup, aplica, mede depois e compara)
+# 3. Apply (measures before, backs up, applies, measures after and compares)
 powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply
 
-# 3b. Aplicar sem mexer no DNS
+# 3b. Apply without touching DNS
 powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -Dns Keep
 
-# 3c. Aplicar e forçar o DNS da Cloudflare (sem testar os outros)
+# 3c. Apply and force Cloudflare DNS (without testing the others)
 powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -Dns Cloudflare
 
-# 4. Desfazer tudo (usa o backup mais recente)
+# 4. Undo everything (uses the most recent backup)
 powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Revert
 ```
 
-Outras opções:
+Other options:
 
-- `-Count 100`: mais pings por alvo (o padrão é 50).
-- `-Services Epic,Valve`: testa só alguns serviços de jogos (opções: `Epic`, `Valve`, `Blizzard`, `Ubisoft`, `Microsoft`, `Embark`; por defeito, todos).
-- `-ExtraTargets 1.2.3.4`: junta um servidor teu ao teste (o IP de outro jogo, por exemplo).
-- `-SkipTest`: aplica sem fazer os testes antes e depois.
-- `-BackupFile .\backups\backup-XXXX.json`: escolhe um backup específico para o Revert.
-- `-Ascii`: usa só caracteres ASCII no ecrã, se a tua consola mostrar quadrados em vez de `✓ ─ ╭`. No Windows Terminal (o padrão do Windows 11) não é preciso.
+- `-Count 100`: more pings per target (default is 50).
+- `-Services Epic,Valve`: tests only some game services (options: `Epic`, `Valve`, `Blizzard`, `Ubisoft`, `Microsoft`, `Embark`; all by default).
+- `-ExtraTargets 1.2.3.4`: adds your own server to the test (another game's IP, for example).
+- `-SkipTest`: applies without running the before and after tests.
+- `-BackupFile .\backups\backup-XXXX.json`: picks a specific backup for Revert.
+- `-Ascii`: uses only ASCII characters on screen, if your console shows boxes instead of `✓ ─ ╭`. Not needed in Windows Terminal (the Windows 11 default).
 
-Durante o Apply, a ligação cai uns segundos enquanto as placas reiniciam.
+Full help: `Get-Help .\NetTune.ps1 -Full`.
 
-**Reinicia o PC depois do Apply (e do Revert).** A opção "permitir que o computador desligue este dispositivo" só muda depois de reiniciar, por isso o teste "depois" que o script faz ainda não a inclui. O script avisa no fim quando é preciso reiniciar.
+During Apply, the connection drops for a few seconds while the adapters restart.
 
-### Como funciona a gestão de energia
+**Restart the PC after Apply (and after Revert).** The "allow the computer to turn off this device" option only changes after a restart, so the script's "after" test does not include it yet. The script tells you at the end when a restart is needed.
 
-O `Set-NetAdapterPowerManagement` não tem nenhum parâmetro para esta opção, por isso o script escreve diretamente no registo. É a mesma coisa que tirar o visto na caixa do Gestor de Dispositivos:
+### How power management works
 
-- Chave: `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}\00XX`, a subchave cujo `NetCfgInstanceId` é o GUID da placa.
-- Valor: `PnPCapabilities` (DWORD) = `24`.
-- O backup guarda o valor antigo, ou que não existia. O Revert repõe esse valor ou apaga a entrada.
+`Set-NetAdapterPowerManagement` has no parameter for this option, so the script writes to the registry directly. It is the same as unticking the box in Device Manager:
 
-## Como ler o ecrã
+- Key: `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}\00XX`, the subkey whose `NetCfgInstanceId` is the adapter's GUID.
+- Value: `PnPCapabilities` (DWORD) = `24`.
+- The backup stores the old value, or that it was not set. Revert restores that value or deletes the entry.
 
-**Estado atual.** Cada placa aparece com as suas opções:
+## Reading the screen
 
-- `✓` verde: já está otimizado.
-- `!` amarelo: o Apply vai mudar isto (o valor novo aparece a seguir à `→`).
+**Current state.** Each adapter is shown with its options:
 
-No modo Test, o resumo no fim diz quantos ajustes faltam.
+- Green `✓`: already optimized.
+- Yellow `!`: Apply will change this (the new value appears after the `→`).
 
-**Teste de ligação.** Mede o **router**, a **Cloudflare** e a **Google**, e um servidor de cada serviço de jogos (ver abaixo). As linhas vão aparecendo à medida que cada alvo termina, com uma barra de progresso. Cada valor é pintado de **verde** (bom), **amarelo** (razoável) ou **vermelho** (mau). A coluna *Estado* dá o veredicto da linha: o pior dos valores.
+In Test mode, the summary at the end says how many tweaks are left.
 
-| Coluna | O que é | Verde | Amarelo |
+**Connection test.** Measures the **router**, **Cloudflare** and **Google**, plus one server per game service (see below). Rows appear as each target finishes, with a progress bar. Each value is colored **green** (good), **yellow** (fair) or **red** (bad). The *Status* column gives the row's verdict: the worst of its values.
+
+| Column | What it is | Green | Yellow |
 |---|---|---|---|
-| Servidor | A região medida. Nos jogos, é a mais próxima de ti, escolhida automaticamente | | |
-| Média | Ping médio | Router ≤ 5 ms · Cloudflare/Google ≤ 40 · jogos ≤ 60 | Router ≤ 15 · ≤ 80 · ≤ 100 |
-| Máx | Pior ping | Até 30 ms acima do mínimo | Até 100 ms acima |
-| Jitter | O quanto o ping varia de um pacote para o outro | ≤ 5 ms | ≤ 15 ms |
-| Picos | Pings que ficaram 100 ms acima do mínimo | 0 | 1-2 |
-| Perda | Pacotes perdidos | 0% | ≤ 2% |
+| Server | The region measured. For games, the one closest to you, picked automatically | | |
+| Avg | Average ping | Router ≤ 5 ms · Cloudflare/Google ≤ 40 · games ≤ 60 | Router ≤ 15 · ≤ 80 · ≤ 100 |
+| Max | Worst ping | Up to 30 ms above the minimum | Up to 100 ms above |
+| Jitter | How much the ping varies from one packet to the next | ≤ 5 ms | ≤ 15 ms |
+| Spikes | Pings 100 ms or more above the minimum | 0 | 1-2 |
+| Loss | Lost packets | 0% | ≤ 2% |
 
-Com poucos pings (por exemplo `-Count 5`), um único pacote perdido já dá 20% e a linha fica vermelha. Para um diagnóstico a sério usa o padrão de 50.
+With few pings (for example `-Count 5`), a single lost packet is already 20% and the row turns red. For a proper diagnosis use the default of 50.
 
-**Antes vs depois** (no Apply). Mostra a média, o jitter e a perda com `▼` verde quando melhorou, `▲` vermelho quando piorou e `=` quando ficou igual.
+**Before vs after** (in Apply). Shows the average, jitter and loss with a green `▼` when it improved, a red `▲` when it got worse and `=` when it stayed the same.
 
-**A regra de ouro:** se o ping ao **router** está alto ou tem picos, o problema está no teu PC ou no Wi-Fi, não na operadora nem no jogo. O router está ao teu lado; 1-5 ms é o normal.
+**The golden rule:** if the ping to the **router** is high or has spikes, the problem is your PC or the Wi-Fi, not your ISP or the game. The router is right next to you; 1-5 ms is normal.
 
-## Teste de DNS
+## DNS test
 
-Por defeito (`-Dns Auto`), o modo Test e o Apply testam **Cloudflare**, **Google**, **Quad9** e **OpenDNS**, e mostram também o DNS que estás a usar como referência. O DNS atual é o da placa que está mesmo a levar o tráfego para a internet, a rota que o próprio Windows escolhe; uma placa desligada com uma rota antiga não conta.
+By default (`-Dns Auto`), Test and Apply modes test **Cloudflare**, **Google**, **Quad9** and **OpenDNS**, and also show the DNS you are using as a reference. The current DNS is the one of the adapter actually carrying traffic to the internet, the route Windows itself picks; a disconnected adapter with an old route does not count.
 
-- **Como mede:** o script envia consultas DNS diretamente a cada servidor (UDP, porta 53), sem passar pela cache do Windows. São 10 domínios que usas a jogar (Epic, Steam, Battle.net, Ubisoft, Xbox, Discord, Twitch...) × 3 rondas, mais 5 nomes aleatórios que obrigam o servidor a ir perguntar ao domínio. Os servidores são intercalados, para todos apanharem as mesmas condições da rede.
-- **Colunas:** *Mediana* é o tempo habitual de resposta (com cache), *Sem cache* é a primeira vez que um nome é pedido, *Falhas* são as consultas sem resposta. O escolhido leva `★`.
-- **O router não conta.** Se o teu DNS é o router (por exemplo `192.168.1.254`) ou outro IP da rede local, ele só reencaminha para o DNS da operadora. Responde em ~1 ms porque guarda cache na rede local, mas isso não é comparável com um DNS a sério. Aparece na tabela só como referência ("cache local, não conta").
-- **Como escolhe:** pontuação = 70% mediana + 30% sem cache, só entre DNS públicos com até 10% de falhas. Diferenças até **5 ms (ou 20%)** contam como empate, porque o mesmo servidor varia isso de um teste para outro. Em empate prefere **Cloudflare**, depois Google (o Quad9 e o OpenDNS filtram domínios).
-- **Quando muda:** se o teu DNS é o router ou o da operadora, muda para o escolhido. Se já usas um DNS público, só troca se o outro for melhor por mais do que a margem de empate.
-- **Como aplica:** em cada placa, **IPv4 e IPv6 em separado**, definidos à mão (`netsh`, pelo índice da placa). Depois volta a ler cada família e só mostra `✓` se ficou mesmo aplicada. Se o IPv6 estiver desligado na placa, só define o IPv4.
-- **Backup e Revert:** o DNS antigo de cada família fica no backup. O Revert repõe cada uma (a lista fixa antiga, ou automático/DHCP se não havia).
-- **Redes que bloqueiam DNS externo** (escolas, empresas, algumas redes públicas): os DNS públicos aparecem como "não responde" e o script **não muda nada**, porque mudar cortava-te a internet. Com `-Dns Cloudflare` (forçado), o script confirma primeiro que esse DNS responde. Se não responder, recusa.
-- **Honestidade:** o DNS só acelera abrir sites e ligar aos serviços (login, lojas, matchmaking). **Não muda o ping dentro do jogo.**
+- **How it measures:** the script sends DNS queries straight to each server (UDP, port 53), bypassing the Windows cache. 10 domains you use while gaming (Epic, Steam, Battle.net, Ubisoft, Xbox, Discord, Twitch...) × 3 rounds, plus 5 random names that force the server to ask the domain itself. Servers are interleaved, so they all get the same network conditions.
+- **Columns:** *Median* is the usual response time (cached), *Uncached* is the first time a name is requested, *Fails* are the queries with no answer. The chosen one gets a `★`.
+- **The router does not count.** If your DNS is the router (for example `192.168.1.254`) or another local network IP, it only forwards to your ISP's DNS. It answers in ~1 ms because it caches on the local network, but that is not comparable with a real DNS. It appears in the table only as a reference ("local cache, ignored").
+- **How it chooses:** score = 70% median + 30% uncached, only among public DNS servers with up to 10% failures. Differences up to **5 ms (or 20%)** count as a tie, because the same server varies that much between runs. On a tie it prefers **Cloudflare**, then Google (Quad9 and OpenDNS filter domains).
+- **When it switches:** if your DNS is the router or your ISP's, it switches to the chosen one. If you already use a public DNS, it only switches if the other one is better by more than the tie margin.
+- **How it applies:** on each adapter, **IPv4 and IPv6 separately**, set by hand (`netsh`, by adapter index). Then it reads each family back and only shows `✓` if it was really applied. If IPv6 is disabled on the adapter, it only sets IPv4.
+- **Backup and Revert:** the old DNS of each family is stored in the backup. Revert restores each one (the old static list, or automatic/DHCP if there was none).
+- **Networks that block external DNS** (schools, offices, some public networks): the public DNS servers show up as "no response" and the script **changes nothing**, because changing would cut your internet. With `-Dns Cloudflare` (forced), the script first checks that DNS answers. If it does not, it refuses.
+- **Honesty:** DNS only speeds up opening sites and connecting to services (login, stores, matchmaking). **It does not change in-game ping.**
 
-Opções: `-Dns Auto` (padrão), `-Dns Keep` (não testa nem mexe), `-Dns Cloudflare | Google | Quad9 | OpenDNS` (força esse, depois de confirmar que responde).
+Options: `-Dns Auto` (default), `-Dns Keep` (does not test or touch DNS), `-Dns Cloudflare | Google | Quad9 | OpenDNS` (forces that one, after checking it answers).
 
-## Servidores de jogos
+## Game servers
 
-Para cada serviço, o script faz primeiro um teste rápido a todas as regiões (em paralelo), fica com a mais próxima de ti e só depois mede essa a sério. No Apply, o teste "depois" usa os mesmos servidores que o "antes", para a comparação ser justa.
+For each service, the script first runs a quick test on every region (in parallel), keeps the one closest to you and only then measures it properly. In Apply, the "after" test uses the same servers as "before", so the comparison is fair.
 
-| Serviço | O que é medido | Regiões | Quão perto do jogo real |
+| Service | What is measured | Regions | How close to the real game |
 |---|---|---|---|
-| **Epic Games** | Beacons de ping oficiais do Fortnite | França, Alemanha, Reino Unido, EUA (Este, Centro, Oeste), Brasil | Os próprios servidores de ping do jogo |
-| **Valve / Steam** | Relays SDR da Valve (CS2, Dota 2, Deadlock…). A lista vem em direto da API da Steam, com uma lista interna de reserva | Todos os datacenters da Valve no mundo | É por estes relays que passa o tráfego do jogo |
-| **Blizzard** | Servidores Battle.net | Europa, EUA, Coreia | Infraestrutura da Blizzard (na Google Cloud) |
-| **Ubisoft** | Regiões Azure usadas pelo Rainbow Six, mais AWS (GameLift) | Azure Irlanda, Holanda, EUA ×4, Brasil · AWS Frankfurt, EUA Este | Os datacenters onde os servidores correm, não o servidor em si |
-| **Microsoft / Xbox** | Regiões Azure | 15 regiões, da Europa à Ásia e Austrália | Os datacenters, não o servidor em si |
-| **Embark** | The Finals / Arc Raiders correm na Google Cloud, mas a Embark não tem endpoints públicos de ping. Mede-se a região Google Cloud | Google Cloud Holanda, EUA, Coreia | Referência aproximada |
+| **Epic Games** | Official Fortnite ping beacons | France, Germany, United Kingdom, US (East, Central, West), Brazil | The game's own ping servers |
+| **Valve / Steam** | Valve SDR relays (CS2, Dota 2, Deadlock…). The list comes live from the Steam API, with a built-in fallback list | Every Valve datacenter worldwide | Game traffic goes through these relays |
+| **Blizzard** | Battle.net servers | Europe, US, Korea | Blizzard infrastructure (on Google Cloud) |
+| **Ubisoft** | Azure regions used by Rainbow Six, plus AWS (GameLift) | Azure Ireland, Netherlands, US ×4, Brazil · AWS Frankfurt, US East | The datacenters where the servers run, not the server itself |
+| **Microsoft / Xbox** | Azure regions | 15 regions, from Europe to Asia and Australia | The datacenters, not the server itself |
+| **Embark** | The Finals / Arc Raiders run on Google Cloud, but Embark has no public ping endpoints. The Google Cloud region is measured instead | Google Cloud Netherlands, US, Korea | Rough reference |
 
-Notas:
+Notes:
 
-- **`tcp` na coluna Servidor:** a Azure bloqueia o ping, por isso nesses servidores mede-se o tempo de ligação TCP (porta 443). O handshake TCP demora praticamente um ida-e-volta, por isso os números são comparáveis com o ping.
-- **É uma referência, não o ping exato do jogo.** O ping dentro do jogo depende do servidor concreto do jogo. Mas, se a região mais próxima já tem picos ou perda aqui, também vai ter no jogo.
-- **Riot (Valorant, LoL)** ficou de fora: os IPs públicos de ping deles já não respondem.
-- Para outro jogo, junta o IP do servidor com `-ExtraTargets`.
+- **`tcp` in the Server column:** Azure blocks ping, so on those servers the TCP connect time (port 443) is measured. A TCP handshake takes almost exactly one round trip, so the numbers are comparable with ping.
+- **It is a reference, not the exact in-game ping.** In-game ping depends on the specific match server. But if the closest region already shows spikes or loss here, the game will too.
+- **Riot (Valorant, LoL)** is left out: their public ping IPs no longer respond.
+- For another game, add its server IP with `-ExtraTargets`.
 
-## Ficheiros
+## Files
 
-- `backups/backup-<data>.json`: o estado original de cada opção alterada (incluindo o `PnPCapabilities` antigo de cada placa e o plano de energia do Wi-Fi).
-- `logs/nettune-<modo>-<data>.log`: o registo completo de cada execução.
+- `backups/backup-<date>.json`: the original state of every changed option (including each adapter's old `PnPCapabilities` and the Wi-Fi power plan).
+- `logs/nettune-<mode>-<date>.log`: the full log of every run.
 
-As duas pastas estão no `.gitignore`, porque são específicas de cada PC.
+Both folders are in `.gitignore`, because they are specific to each PC.
 
-## Notas
+## Notes
 
-- Um update do driver da placa (Windows Update ou Lenovo Vantage, por exemplo) pode repor os valores de fábrica. Se os picos voltarem, corre o `-Mode Apply` outra vez.
-- Se aparecer um erro de política de execução, usa sempre `powershell -ExecutionPolicy Bypass -File ...` como nos exemplos.
-- Feito para o PowerShell 5.1 (o que vem com o Windows). Também deve correr no PowerShell 7.
+- An adapter driver update (Windows Update or Lenovo Vantage, for example) can restore the factory values. If the spikes come back, run `-Mode Apply` again.
+- If you get an execution policy error, always use `powershell -ExecutionPolicy Bypass -File ...` as in the examples.
+- Built for PowerShell 5.1 (the one that ships with Windows). It also runs on PowerShell 7.
 
-## Licença
+## License
 
 MIT
