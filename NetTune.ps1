@@ -18,13 +18,24 @@
       - Roaming aggressiveness -> lowest / disabled
       - Energy-Efficient Ethernet / Green Ethernet -> off
       - USB selective suspend of the adapter -> off
-      - RSC (Receive Segment Coalescing) -> off
       - DNS -> tests the current one against Cloudflare, Google, Quad9 and OpenDNS and applies the
         fastest, only if it is clearly better (DNS does NOT change in-game ping, only how fast names resolve)
 
+    TCP Optimizer-style tweaks (skip them with -NoTcp). The README says what each one really changes:
+      - TCP globals: heuristics off, auto-tuning normal, timestamps off, initial RTO 2000,
+        max SYN retransmissions 2, non-SACK RTT resiliency off. CUBIC, ECN and MinRto are left alone.
+      - Offloads: RSS on, RSC off, packet coalescing off, checksum offload on, LSO off
+      - Registry: Tcpip (DefaultTTL, MaxUserPort, TcpTimedWaitDelay), Nagle per adapter,
+        MMCSS (NetworkThrottlingIndex, SystemResponsiveness = 10), ServiceProvider priorities,
+        Psched, QoS, IE max connections, LargeSystemCache = 0. Takes effect after a restart.
+
+    MTU (skip it with -NoMtu): finds the largest MTU of the current network with "Don't Fragment"
+    pings to 1.1.1.1, 8.8.8.8 and 9.9.9.9 and sets it only if it is below 1500.
+
 .PARAMETER Mode
     Test   : only measures and shows the adapter state (no admin needed, changes nothing). Default.
-    Apply  : measures, backs up, applies the tweaks, measures again and compares. Needs admin.
+    Apply  : measures, backs up, applies the tweaks, measures again and compares. Needs admin
+             (except with -WhatIf, the dry run).
     Revert : restores the latest backup (or the one given in -BackupFile). Needs admin.
 
 .PARAMETER Dns
@@ -47,6 +58,17 @@
 .PARAMETER Services
     Which game services to test: Epic, Valve, Blizzard, Ubisoft, Microsoft, Embark. All by default.
     For each one, the script picks the closest region by itself.
+
+.PARAMETER NoTcp
+    In Apply mode, skips the TCP Optimizer-style tweaks (TCP globals, offloads, registry, Nagle).
+
+.PARAMETER NoMtu
+    Skips the MTU test (and, in Apply, setting the MTU).
+
+.PARAMETER AfterRestart
+    With -Mode Test. Started once by the scheduled task that Apply creates when you answer "y" to
+    "Restart now?": waits for the network, lets startup programs settle, tests and compares with the
+    "before" test saved by Apply. You do not need to use it yourself.
 
 .PARAMETER Ascii
     Uses only ASCII characters on screen (for old consoles without a Unicode font).
@@ -90,13 +112,27 @@ param(
     # The list is split and validated further down.
     [string[]]$Services = @('Epic', 'Valve', 'Blizzard', 'Ubisoft', 'Microsoft', 'Embark'),
 
+    [switch]$NoTcp,
+
+    [switch]$NoMtu,
+
+    # Used by the one-time scheduled task after the restart that Apply offers.
+    [switch]$AfterRestart,
+
     [switch]$Ascii
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$Version   = '1.6.1'
+# Load the network modules now with WhatIf off: loaded later under -WhatIf, NetTCPIP prints
+# "What if: New Alias gip" while it defines its aliases.
+$savedWhatIf = $WhatIfPreference
+$WhatIfPreference = $false
+Import-Module NetAdapter, NetTCPIP, DnsClient -ErrorAction SilentlyContinue
+$WhatIfPreference = $savedWhatIf
+
+$Version   = '1.7.0'
 $Root      = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $BackupDir = Join-Path $Root 'backups'
 $LogDir    = Join-Path $Root 'logs'
@@ -113,26 +149,86 @@ $DnsPresets = @{
 $DnsTestDomains = @('google.com', 'youtube.com', 'epicgames.com', 'steampowered.com', 'battle.net',
                     'ubisoft.com', 'xboxlive.com', 'discord.com', 'twitch.tv', 'microsoft.com')
 
-# Rules for the adapters' advanced properties.
-# Display: regex against the property name (EN / PT / ES, because the driver uses the Windows language).
-# Want   : regex against the valid values; the first match wins.
-# "Off" in EN / PT-BR / PT-PT / ES (Disabled, Desabilitado, Desativado, Desactivado, Deshabilitado...).
-$OffValues = 'Disab|Desab|Deshab|Desact|Desativ|Deslig|^Off$'
-
+# Rules for the adapters' advanced properties, by RegistryKeyword: the DisplayName changes with the
+# Windows language, the keyword does not. Want = the registry value for "off" / "lowest" (0 in all of
+# these drivers: Intel, Realtek, MediaTek...).
 $Rules = @(
-    @{ Label = 'Adapter power saving'
-       Display = '^(Power Saving|Power Save Mode|Power Saving Mode|Modo de economia de energia|Economia de energia|Poupança de energia|Modo de poupança de energia|Ahorro de energía|Modo de ahorro de energía)$'
-       Want = $OffValues }
-    @{ Label = 'Roaming aggressiveness'
-       Display = 'Roaming Aggressiveness|Agressividade de roaming|Agresividad de itinerancia|Agresividad de roaming'
-       Want = '^1\.|Lowest|Mais baix|Más baj|Disab|Desab|Deshab|Desact' }
-    @{ Label = 'Energy-Efficient Ethernet'
-       Display = 'Energy.Efficient Ethernet|Advanced EEE|^EEE$|Green Ethernet|Ethernet verde|Ethernet.*efici'
-       Want = $OffValues }
-    @{ Label = 'USB selective suspend'
-       Display = 'Selective Suspend|Suspensão seletiva|Suspensión selectiva'
-       Want = $OffValues }
+    @{ Label = 'Adapter power saving';      Keyword = '^\*?(PowerSavingMode|PowerSaveMode|PowerSaving|LowPowerEnable|PSMode)$';            Want = '0' }
+    @{ Label = 'Roaming aggressiveness';    Keyword = '^\*?(RoamAggressiveness|RoamingAggressiveness|RoamNeedIndicateTh)$';               Want = '0' }
+    @{ Label = 'Energy-Efficient Ethernet'; Keyword = '^\*?(EEE|AdvancedEEE|EEELinkAdvertisement|EnableGreenEthernet|GreenEthernet)$';    Want = '0' }
+    @{ Label = 'USB selective suspend';     Keyword = '^\*?SelectiveSuspend$';                                                            Want = '0' }
 )
+
+# Standard keywords: if the driver does not expose them, Windows cannot change that offload.
+$KwLso      = '^\*Lso(V1IPv4|V2IPv4|V2IPv6)$'
+$KwChecksum = '^\*(IP|TCP|UDP)ChecksumOffloadIPv[46]$'
+$ChecksumProps = [ordered]@{
+    IpIPv4Enabled = 'IP IPv4'; TcpIPv4Enabled = 'TCP IPv4'; TcpIPv6Enabled = 'TCP IPv6'; UdpIPv4Enabled = 'UDP IPv4'; UdpIPv6Enabled = 'UDP IPv6'
+}
+
+# ---------------------------------------------------------------- TCP Optimizer-style tweaks (-NoTcp skips them)
+# Global TCP settings, in the template Windows uses for internet traffic. Heuristics first: changed
+# after auto-tuning, they can override it. Congestion provider (CUBIC), ECN and MinRto are left alone
+# (MinRto is read-only on Windows 10/11). Chimney, NetDMA and DCA are obsolete and not included.
+$TcpTemplate = 'Internet'
+$TcpGlobalTweaks = @(
+    @{ Name = 'ScalingHeuristics';     Label = 'Scaling heuristics';         Want = 'Disabled'; Netsh = 'heuristics' }
+    @{ Name = 'AutoTuningLevelLocal';  Label = 'Receive window auto-tuning'; Want = 'Normal';   Netsh = 'autotuninglevel' }
+    @{ Name = 'Timestamps';            Label = 'Timestamps';                 Want = 'Disabled'; Netsh = 'timestamps' }
+    @{ Name = 'InitialRtoMs';          Label = 'Initial RTO (ms)';           Want = 2000;       Netsh = 'initialRto' }
+    @{ Name = 'MaxSynRetransmissions'; Label = 'Max SYN retransmissions';    Want = 2;          Netsh = 'maxsynretransmissions' }
+    @{ Name = 'NonSackRttResiliency';  Label = 'Non-SACK RTT resiliency';    Want = 'Disabled'; Netsh = 'nonsackrttresiliency' }
+)
+$OffloadGlobalTweaks = @(
+    @{ Name = 'ReceiveSideScaling';       Label = 'RSS (global)';      Want = 'Enabled';  Netsh = 'rss' }
+    @{ Name = 'ReceiveSegmentCoalescing'; Label = 'RSC (global)';      Want = 'Disabled'; Netsh = 'rsc' }
+    @{ Name = 'PacketCoalescingFilter';   Label = 'Packet coalescing'; Want = 'Disabled'; Netsh = $null }
+)
+
+# Registry (HKLM). Takes effect after a restart.
+$TcpipKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters'
+$MmcssKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
+$SvcProvKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider'
+$IeFeatKey = 'HKLM:\SOFTWARE\Microsoft\Internet Explorer\Main\FeatureControl'
+$RegTweaks = @(
+    @{ Label = 'DefaultTTL';             Path = $TcpipKey;   Name = 'DefaultTTL';             Type = 'DWord';  Value = 64 }
+    @{ Label = 'MaxUserPort';            Path = $TcpipKey;   Name = 'MaxUserPort';            Type = 'DWord';  Value = 65534 }
+    @{ Label = 'TcpTimedWaitDelay';      Path = $TcpipKey;   Name = 'TcpTimedWaitDelay';      Type = 'DWord';  Value = 30 }
+    # 0xffffffff = network throttling off. As a signed DWORD that is -1.
+    @{ Label = 'NetworkThrottlingIndex'; Path = $MmcssKey;   Name = 'NetworkThrottlingIndex'; Type = 'DWord';  Value = -1; Hex = $true }
+    # 10, not 0: Microsoft documents that below 10 Windows uses 20.
+    @{ Label = 'SystemResponsiveness';   Path = $MmcssKey;   Name = 'SystemResponsiveness';   Type = 'DWord';  Value = 10 }
+    @{ Label = 'LocalPriority';          Path = $SvcProvKey; Name = 'LocalPriority';          Type = 'DWord';  Value = 4 }
+    @{ Label = 'HostsPriority';          Path = $SvcProvKey; Name = 'HostsPriority';          Type = 'DWord';  Value = 5 }
+    @{ Label = 'DnsPriority';            Path = $SvcProvKey; Name = 'DnsPriority';            Type = 'DWord';  Value = 6 }
+    @{ Label = 'NetbtPriority';          Path = $SvcProvKey; Name = 'NetbtPriority';          Type = 'DWord';  Value = 7 }
+    @{ Label = 'Psched NonBestEffortLimit'; Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched'; Name = 'NonBestEffortLimit'; Type = 'DWord'; Value = 0 }
+    @{ Label = 'QoS "Do not use NLA"';   Path = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\QoS'; Name = 'Do not use NLA'; Type = 'String'; Value = '1' }
+    @{ Label = 'MaxConn/1.0 explorer';   Path = "$IeFeatKey\FEATURE_MAXCONNECTIONSPER1_0SERVER"; Name = 'explorer.exe'; Type = 'DWord'; Value = 10 }
+    @{ Label = 'MaxConn/1.0 iexplore';   Path = "$IeFeatKey\FEATURE_MAXCONNECTIONSPER1_0SERVER"; Name = 'iexplore.exe'; Type = 'DWord'; Value = 10 }
+    @{ Label = 'MaxConn/1.1 explorer';   Path = "$IeFeatKey\FEATURE_MAXCONNECTIONSPERSERVER";    Name = 'explorer.exe'; Type = 'DWord'; Value = 10 }
+    @{ Label = 'MaxConn/1.1 iexplore';   Path = "$IeFeatKey\FEATURE_MAXCONNECTIONSPERSERVER";    Name = 'iexplore.exe'; Type = 'DWord'; Value = 10 }
+    @{ Label = 'LargeSystemCache';       Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'; Name = 'LargeSystemCache'; Type = 'DWord'; Value = 0 }
+)
+# Nagle, in Tcpip\Parameters\Interfaces\{InterfaceGuid} of each physical adapter.
+$NagleTweaks = @(
+    @{ Name = 'TcpAckFrequency'; Type = 'DWord'; Value = 1 }
+    @{ Name = 'TCPNoDelay';      Type = 'DWord'; Value = 1 }
+    @{ Name = 'TcpDelAckTicks';  Type = 'DWord'; Value = 0 }
+)
+
+# ---------------------------------------------------------------- MTU test (-NoMtu skips it)
+$MtuTargets    = @('1.1.1.1', '8.8.8.8', '9.9.9.9')
+$MtuMinPayload = 1172   # MTU 1200 (payload + 20 IP + 8 ICMP)
+
+# ---------------------------------------------------------------- scheduled tasks
+# Nagle keeper: Wi-Fi keeps the TCP/IP settings of the current network in the adapter's key and
+# Windows rebuilds that key when it connects to another network, which wipes the Nagle values.
+# This SYSTEM task writes them again on every "network connected" event (no window).
+$NagleTask   = @{ Path = '\NetTune\'; Name = 'NetTune Nagle keeper' }
+# After restart: runs "-Mode Test -AfterRestart" once at the next logon, then deletes itself.
+$AfterTask   = @{ Path = '\NetTune\'; Name = 'NetTune after restart' }
+$PendingFile = Join-Path $LogDir 'pending-after-restart.json'
 
 # Windows power plan -> "Wireless Adapter Settings" -> "Power Saving Mode".
 # 0 = Maximum performance, 1 = Low power saving, 2 = Medium power saving, 3 = Maximum power saving.
@@ -145,6 +241,8 @@ $WifiPowerNames = @('Maximum performance', 'Low power saving', 'Medium power sav
 $NetClassKey    = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}'
 $PnPCapOff      = 24
 $script:RebootNeeded = $false
+$script:RegChanged   = $false
+$script:RestartNow   = $false
 $script:ChangeCount  = 0
 
 # ---------------------------------------------------------------- game servers
@@ -276,6 +374,53 @@ function Write-Change([string]$Label, [string]$From, [string]$To, [string]$Note 
     $script:ChangeCount++
 }
 
+function Write-Fail([string]$Label, [string]$Text) {
+    # A change that did not stick (read back after applying).
+    Write-Seg "    $($G.Bad) " Red
+    Write-Seg $Label White
+    Write-Host "  $Text" -ForegroundColor Red
+}
+
+function Write-Unsupported([string]$Label, [string]$Text = 'not supported on this Windows') {
+    # Read-only on this Windows build / driver: reported, and the script goes on.
+    Write-Seg "    $($G.Warn) " Yellow
+    Write-Seg $Label White
+    Write-Host "  $Text" -ForegroundColor Yellow
+}
+
+$script:StatusOn = $false
+
+function Write-Status([string]$Text) {
+    # One gray line that updates in place, so long phases visibly move. [Console]::Write does not
+    # go into the log (Start-Transcript), which keeps the log clean. Nothing if output is redirected.
+    try { if ([Console]::IsOutputRedirected) { return } } catch { return }
+    $w = 100
+    try { $w = [math]::Max(20, [Console]::WindowWidth - 1) } catch { }
+    if ($Text.Length -gt $w) { $Text = $Text.Substring(0, $w - 1) + $G.Ell }
+    $old = [Console]::ForegroundColor
+    try {
+        [Console]::ForegroundColor = 'DarkGray'
+        [Console]::Write("`r" + $Text.PadRight($w))
+    } finally { [Console]::ForegroundColor = $old }
+    $script:StatusOn = $true
+}
+
+function Clear-Status {
+    if (-not $script:StatusOn) { return }
+    $w = 100
+    try { $w = [math]::Max(20, [Console]::WindowWidth - 1) } catch { }
+    try { [Console]::Write("`r" + (' ' * $w) + "`r") } catch { }
+    $script:StatusOn = $false
+}
+
+function Write-Section([string]$Text, [string]$Note = '') {
+    Write-Host ''
+    Write-Seg "  $($G.Node) " Cyan
+    Write-Seg $Text White
+    if ($Note) { Write-Seg "  $Note" DarkGray }
+    Write-Host ''
+}
+
 function Write-KV([string]$Key, [string]$Value, [string]$State = 'none', [string]$Hint = '') {
     # "key ······ value" line with a state: ok (green), warn (yellow, Apply changes it), bad, none.
     $w = 30
@@ -315,7 +460,7 @@ function Write-Box([string]$Title, [object[]]$Lines, [ConsoleColor]$Frame = 'Dar
 
 function Write-Banner {
     $info = @{
-        Test   = @('TEST',   'Measures and shows the state. Changes nothing.',            'Cyan')
+        Test   = @('TEST',   $(if ($AfterRestart) { 'After the restart: compares with the test before Apply.' } else { 'Measures and shows the state. Changes nothing.' }), 'Cyan')
         Apply  = @('APPLY',  'Measures, backs up, applies the tweaks, measures again.',   'Green')
         Revert = @('REVERT', 'Restores the backup and undoes the tweaks.',                'Magenta')
     }[$Mode]
@@ -423,6 +568,7 @@ function Wait-Network([int]$TimeoutSec = 40) {
         while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
             $s = [int]$sw.Elapsed.TotalSeconds
             Write-Progress -Id 2 -Activity 'Waiting for the network to come back' -Status "$s s / $TimeoutSec s" -PercentComplete ([math]::Min(100, [int](100 * $s / $TimeoutSec)))
+            Write-Status "    waiting for the router to answer... $s s / $TimeoutSec s"
             $gw = Get-DefaultGateway
             if ($gw) {
                 try {
@@ -435,6 +581,7 @@ function Wait-Network([int]$TimeoutSec = 40) {
         return $false
     } finally {
         Write-Progress -Id 2 -Activity 'Waiting for the network to come back' -Completed
+        Clear-Status
     }
 }
 
@@ -566,7 +713,9 @@ function Select-GameTargets {
         $svc = $GameServices[$key]
         $regions = $svc.Regions
         if ($svc.ContainsKey('Dynamic') -and $svc.Dynamic -eq 'SteamSDR') {
+            Write-Status '    fetching the Steam relay list...'
             $live = Get-SteamRelayRegions
+            Clear-Status
             if ($live) { $regions = $live } else { Write-Warn2 'Steam: could not fetch the relay list, using the built-in list.' }
         }
         foreach ($r in $regions) {
@@ -578,6 +727,7 @@ function Select-GameTargets {
 
     # 1) Resolve every name in parallel.
     Write-Progress -Id 3 -Activity $activity -Status 'Resolving names (DNS)...' -PercentComplete 5
+    Write-Status "    1/3  resolving $($cands.Count) server names..."
     $dnsTasks = @{}
     foreach ($c in $cands) {
         $parsed = $null
@@ -605,6 +755,7 @@ function Select-GameTargets {
     if ($icmpIps.Count -gt 0) {
         for ($round = 1; $round -le 3; $round++) {
             Write-Progress -Id 3 -Activity $activity -Status "Pinging $($icmpIps.Count) servers (round $round/3)..." -PercentComplete (5 + 15 * $round)
+            Write-Status "    2/3  pinging $($icmpIps.Count) servers at once, round $round of 3..."
             $jobs = foreach ($ip in $icmpIps) {
                 $p = New-Object System.Net.NetworkInformation.Ping
                 [pscustomobject]@{ Ip = $ip; Ping = $p; Task = $p.SendPingAsync($ip, 1000) }
@@ -627,12 +778,15 @@ function Select-GameTargets {
             foreach ($ip in $tcpIps) {
                 $done++
                 Write-Progress -Id 3 -Activity $activity -Status "TCP connect to $($tcpIps.Count) servers (round $round/2)..." -PercentComplete (65 + [int](35 * $done / (2 * $tcpIps.Count)))
+                $rName = @($cands | Where-Object { $_.Ip -eq $ip } | ForEach-Object { $_.Region } | Select-Object -First 1)
+                Write-Status ("    3/3  TCP connect {0}/{1}  {2}" -f $done, (2 * $tcpIps.Count), ($rName -join ''))
                 $ms = Measure-TcpOnce $ip 443 700
                 if ($null -ne $ms -and (-not $best.ContainsKey($ip) -or $ms -lt $best[$ip])) { $best[$ip] = $ms }
             }
         }
     }
     Write-Progress -Id 3 -Activity $activity -Completed
+    Clear-Status
 
     foreach ($c in $cands) { if ($c.Ip -and $best.ContainsKey($c.Ip)) { $c.Best = $best[$c.Ip] } }
 
@@ -825,7 +979,12 @@ function Invoke-NetTest([string]$Title) {
         if ($Services.Count -gt 0) {
             Write-Info "Finding the closest region for each service ($($Services.Count) services)..."
         }
+        $swR = [Diagnostics.Stopwatch]::StartNew()
         $script:GameTargets = @(Select-GameTargets)
+        if ($script:GameTargets.Count -gt 0) {
+            Write-Info ("Regions picked in {0:0.0} s: {1}" -f $swR.Elapsed.TotalSeconds,
+                (@($script:GameTargets | ForEach-Object { "$($_.Label) $($G.Arrow) $($_.Region)" }) -join "  $($G.Dot)  "))
+        }
     }
     foreach ($t in $script:GameTargets) { $targets.Add($t) }
     foreach ($t in $ExtraTargets) { $targets.Add((New-Target 'Extra' $t 'game' 'icmp' $t)) }
@@ -1237,12 +1396,754 @@ function Test-AdapterIPv6($Adapter) {
     try { return [bool](Get-NetAdapterBinding -Name $Adapter.Name -ComponentID ms_tcpip6 -ErrorAction Stop).Enabled } catch { return $true }
 }
 
+# ---------------------------------------------------------------- tcp, offloads and registry
+
+function Invoke-Netsh([string[]]$Arguments) {
+    # Runs netsh quietly. Its text is in the Windows language, so only the exit code is used.
+    try { & netsh @Arguments 2>&1 | Out-Null } catch { }
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Get-TcpGlobalValue([string]$Name) {
+    # Value in the TCP template Windows uses for internet traffic. $null if it cannot be read
+    # (some fields are only visible to administrators).
+    try {
+        $s = Get-NetTCPSetting -SettingName $TcpTemplate -ErrorAction Stop | Select-Object -First 1
+        $v = $s.$Name
+        if ($null -eq $v -or [string]$v -eq '') { return $null }
+        return [string]$v
+    } catch { return $null }
+}
+
+function Get-OffloadGlobalValue([string]$Name) {
+    try {
+        $v = (Get-NetOffloadGlobalSetting -ErrorAction Stop).$Name
+        if ($null -eq $v -or [string]$v -eq '') { return $null }
+        return [string]$v
+    } catch { return $null }
+}
+
+function Get-GlobalValue([string]$Kind, [string]$Name) {
+    if ($Kind -eq 'tcp') { return Get-TcpGlobalValue $Name }
+    return Get-OffloadGlobalValue $Name
+}
+
+function Set-GlobalValue([string]$Kind, $Tweak, $Value) {
+    # PowerShell cmdlet first; if the value did not change, netsh. The caller reads the value back.
+    $p = @{ $Tweak.Name = $Value }
+    try {
+        if ($Kind -eq 'tcp') { Set-NetTCPSetting -SettingName $TcpTemplate @p -Confirm:$false -ErrorAction Stop }
+        else { Set-NetOffloadGlobalSetting @p -Confirm:$false -ErrorAction Stop }
+    } catch { }
+    if ((Get-GlobalValue $Kind $Tweak.Name) -ne [string]$Value -and $Tweak.Netsh) {
+        $v = ([string]$Value).ToLower()
+        if ($Tweak.Netsh -eq 'heuristics') { [void](Invoke-Netsh @('int', 'tcp', 'set', 'heuristics', $v)) }
+        else { [void](Invoke-Netsh @('int', 'tcp', 'set', 'global', "$($Tweak.Netsh)=$v")) }
+    }
+}
+
+function Write-GlobalState([string]$Kind, $Tweak, [bool]$Active) {
+    # One CURRENT STATE line. Returns 1 if Apply would change it.
+    $v = Get-GlobalValue $Kind $Tweak.Name
+    $want = [string]$Tweak.Want
+    if ($null -eq $v) {
+        $why = if (Test-IsAdmin) { 'cannot be read on this Windows' } else { 'unknown (readable as admin only)' }
+        Write-KV $Tweak.Label $why
+        return 0
+    }
+    if ($v -eq $want) { Write-KV $Tweak.Label $v 'ok'; return 0 }
+    if (-not $Active) { Write-KV $Tweak.Label $v; return 0 }
+    Write-KV $Tweak.Label $v 'warn' $want
+    return 1
+}
+
+function Invoke-GlobalTweak([string]$Kind, $Tweak, $BackupList) {
+    $want = [string]$Tweak.Want
+    $cur = Get-GlobalValue $Kind $Tweak.Name
+    if ($null -eq $cur) {
+        if (Test-IsAdmin) { Write-Unsupported $Tweak.Label 'cannot be read on this Windows, left as is' }
+        else { Write-Unsupported $Tweak.Label 'readable as admin only, left as is' }
+        return
+    }
+    if ($cur -eq $want) { Write-Info "$($Tweak.Label): already $want" 4; return }
+    if (-not $PSCmdlet.ShouldProcess($Tweak.Label, "$cur -> $want")) { Write-Change $Tweak.Label $cur $want; return }
+
+    # Into the backup before changing it: if something fails halfway, Revert still knows the old value.
+    $BackupList.Add([ordered]@{ Name = $Tweak.Name; Old = $cur })
+    Set-GlobalValue $Kind $Tweak $Tweak.Want
+    $now = Get-GlobalValue $Kind $Tweak.Name
+    if ($now -eq $want) { Write-Change $Tweak.Label $cur $want }
+    elseif ($now -eq $cur) { Write-Unsupported $Tweak.Label 'not supported on this Windows (read-only)' }
+    else { Write-Fail $Tweak.Label "was not applied (now: $now)" }
+}
+
+function Restore-GlobalTweak([string]$Kind, $Tweak, $Old) {
+    $cur = Get-GlobalValue $Kind $Tweak.Name
+    if ($cur -eq [string]$Old) { Write-Info "$($Tweak.Label): already $Old" 4; return }
+    if (-not $PSCmdlet.ShouldProcess($Tweak.Label, "-> $Old")) { return }
+    Set-GlobalValue $Kind $Tweak $Old
+    $now = Get-GlobalValue $Kind $Tweak.Name
+    if ($now -eq [string]$Old) { Write-Change $Tweak.Label $cur $Old }
+    elseif ($now -eq $cur) { Write-Unsupported $Tweak.Label 'not supported on this Windows (read-only)' }
+    else { Write-Fail $Tweak.Label "was not restored (now: $now)" }
+}
+
+function Get-RegState([string]$Path, [string]$Name) {
+    # Whether the key and the value exist, and the value with its type.
+    $st = [pscustomobject]@{ KeyExists = $false; Exists = $false; Value = $null; Kind = $null }
+    $key = $null
+    try { $key = Get-Item -LiteralPath $Path -ErrorAction Stop } catch { return $st }
+    $st.KeyExists = $true
+    if (@($key.GetValueNames()) -contains $Name) {
+        $st.Exists = $true
+        $st.Value = $key.GetValue($Name, $null, 'DoNotExpandEnvironmentNames')
+        $st.Kind = [string]$key.GetValueKind($Name)
+    }
+    return $st
+}
+
+function Test-RegWanted($Tweak, $State) {
+    if (-not $State.Exists) { return $false }
+    if ($Tweak.Type -eq 'String') { return ([string]$State.Value -eq [string]$Tweak.Value) }
+    try { return ([int64]$State.Value -eq [int64]$Tweak.Value) } catch { return $false }
+}
+
+function Format-RegValue($Tweak, $Value) {
+    if ($null -eq $Value) { return 'not set' }
+    if ($Tweak.ContainsKey('Hex') -and $Tweak.Hex) {
+        try { return ('0x{0:x8}' -f [int]$Value) } catch { }
+    }
+    return [string]$Value
+}
+
+function Write-RegState($Tweak, [string]$Path, [string]$Label, [bool]$Active) {
+    # One CURRENT STATE line. Returns 1 if Apply would change it.
+    $st = Get-RegState $Path $Tweak.Name
+    $v = Format-RegValue $Tweak $st.Value
+    if (Test-RegWanted $Tweak $st) { Write-KV $Label $v 'ok'; return 0 }
+    if (-not $Active) { Write-KV $Label $v; return 0 }
+    Write-KV $Label $v 'warn' (Format-RegValue $Tweak $Tweak.Value)
+    return 1
+}
+
+function Invoke-RegTweak($Tweak, [string]$Path, [string]$Label, $BackupList) {
+    # Writes one value, saving the old one first (or that the value / its key did not exist,
+    # so Revert deletes instead of writing). Confirms by reading it back.
+    $st = Get-RegState $Path $Tweak.Name
+    $to = Format-RegValue $Tweak $Tweak.Value
+    if (Test-RegWanted $Tweak $st) { Write-Info "${Label}: already $to" 4; return }
+    $from = Format-RegValue $Tweak $st.Value
+    if (-not $PSCmdlet.ShouldProcess($Label, "$from -> $to")) { Write-Change $Label $from $to 'restart the PC'; return }
+
+    $BackupList.Add([ordered]@{ Path = $Path; Name = $Tweak.Name; KeyExisted = $st.KeyExists; Existed = $st.Exists; Value = $st.Value; Kind = $st.Kind })
+    $err = $null
+    try {
+        if (-not $st.KeyExists) { New-Item -Path $Path -Force -ErrorAction Stop | Out-Null }
+        New-ItemProperty -LiteralPath $Path -Name $Tweak.Name -PropertyType $Tweak.Type -Value $Tweak.Value -Force -ErrorAction Stop | Out-Null
+    } catch { $err = $_.Exception.Message }
+
+    if (Test-RegWanted $Tweak (Get-RegState $Path $Tweak.Name)) {
+        Write-Change $Label $from $to 'restart the PC'
+        $script:RebootNeeded = $true
+        $script:RegChanged = $true
+    } elseif ($err) {
+        Write-Fail $Label "could not write it: $err"
+    } else {
+        Write-Fail $Label 'was not applied'
+    }
+}
+
+function Restore-RegValue($Entry) {
+    $label = [string]$Entry.Name
+    $to = if ($Entry.Existed) { [string]$Entry.Value } else { 'not set (deleted)' }
+    if (-not $PSCmdlet.ShouldProcess("$($Entry.Path)\$($Entry.Name)", "-> $to")) { return }
+    try {
+        if ($Entry.Existed) {
+            $kind = if ($Entry.Kind) { [string]$Entry.Kind } else { 'DWord' }
+            New-ItemProperty -LiteralPath $Entry.Path -Name $Entry.Name -PropertyType $kind -Value $Entry.Value -Force -ErrorAction Stop | Out-Null
+        } else {
+            if ((Get-RegState $Entry.Path $Entry.Name).Exists) {
+                Remove-ItemProperty -LiteralPath $Entry.Path -Name $Entry.Name -ErrorAction Stop
+            }
+            # The key was created by Apply: delete it too if it was left empty.
+            if (-not $Entry.KeyExisted) {
+                $k = Get-Item -LiteralPath $Entry.Path -ErrorAction SilentlyContinue
+                if ($k -and $k.ValueCount -eq 0 -and $k.SubKeyCount -eq 0) { Remove-Item -LiteralPath $Entry.Path -ErrorAction Stop }
+            }
+        }
+    } catch {
+        Write-Fail $label $_.Exception.Message
+        return
+    }
+    $st = Get-RegState $Entry.Path $Entry.Name
+    $ok = if ($Entry.Existed) { $st.Exists -and ([string]$st.Value -eq [string]$Entry.Value) } else { -not $st.Exists }
+    if ($ok) {
+        Write-Change $label 'tweaked' $to 'restart the PC'
+        $script:RebootNeeded = $true
+    } else {
+        Write-Fail $label "was not restored (now: $(if ($st.Exists) { $st.Value } else { 'not set' }))"
+    }
+}
+
+function Test-HasKeyword($Props, [string]$Pattern) {
+    # Does the driver expose this standard keyword? If not, Windows cannot change the option.
+    return (@($Props | Where-Object { $_.RegistryKeyword -match $Pattern }).Count -gt 0)
+}
+
+function Get-RssState([string]$Name) {
+    try { return [bool](Get-NetAdapterRss -Name $Name -ErrorAction Stop).Enabled } catch { return $null }
+}
+
+function Get-LsoState([string]$Name) {
+    try {
+        $l = Get-NetAdapterLso -Name $Name -ErrorAction Stop
+        return [pscustomobject]@{ V1IPv4 = [bool]$l.V1IPv4Enabled; IPv4 = [bool]$l.IPv4Enabled; IPv6 = [bool]$l.IPv6Enabled }
+    } catch { return $null }
+}
+
+function Test-LsoOn($Lso) { return ($Lso.V1IPv4 -or $Lso.IPv4 -or $Lso.IPv6) }
+
+function Get-ChecksumState([string]$Name) {
+    try {
+        $c = Get-NetAdapterChecksumOffload -Name $Name -ErrorAction Stop
+        $o = [ordered]@{}
+        foreach ($p in $ChecksumProps.Keys) { $o[$p] = [string]$c.$p }
+        return $o
+    } catch { return $null }
+}
+
+function Get-ChecksumOff($Ck) {
+    # Names of the checksum offloads that are off ('TCP IPv6', ...).
+    return @($ChecksumProps.Keys | Where-Object { $Ck[$_] -eq 'Disabled' } | ForEach-Object { $ChecksumProps[$_] })
+}
+
+# ---------------------------------------------------------------- mtu
+
+function Send-DfPing([string]$Ip, [int]$Size, [int]$Tries = 3) {
+    # One ping with "Don't Fragment". 'ok' = it fits, 'big' = PacketTooBig, 'timeout' = no answer
+    # after $Tries attempts (other errors count as no answer too).
+    $ping = New-Object System.Net.NetworkInformation.Ping
+    $opt = New-Object System.Net.NetworkInformation.PingOptions(64, $true)
+    $buf = New-Object byte[] $Size
+    try {
+        for ($i = 0; $i -lt $Tries; $i++) {
+            $status = ''
+            try { $status = [string]$ping.Send($Ip, 1500, $buf, $opt).Status } catch { }
+            if ($status -eq 'Success') { return 'ok' }
+            if ($status -eq 'PacketTooBig') { return 'big' }
+            Start-Sleep -Milliseconds 100
+        }
+        return 'timeout'
+    } finally {
+        $ping.Dispose()
+    }
+}
+
+$script:MtuStatus = ''
+
+function Test-PayloadFits([string]$Ip, [int]$Size, $State) {
+    $State.Step++
+    Write-Status "$($script:MtuStatus)  search step $($State.Step): $Size bytes (MTU $($Size + 28))..."
+    $r = Send-DfPing $Ip $Size 3
+    # Small packets get through (checked first), so a big one that is never answered was dropped:
+    # some networks drop oversized packets instead of answering "too big".
+    if ($r -eq 'timeout') { $State.Silent = $true }
+    return ($r -eq 'ok')
+}
+
+function Measure-PathMtu([string]$Ip, [int]$MaxPayload) {
+    # Binary search of the largest payload that gets through without fragmenting, then confirmed.
+    # Status: ok | blocked (ICMP blocked) | below (path MTU under 1200) | unconfirmed.
+    $r = [pscustomobject]@{ Ip = $Ip; Payload = $null; Mtu = $null; Status = 'ok'; Silent = $false }
+    $state = @{ Silent = $false; Step = 0 }
+    Write-Status "$($script:MtuStatus)  small ping (is ICMP allowed?)..."
+    if ((Send-DfPing $Ip 64 3) -ne 'ok') { $r.Status = 'blocked'; return $r }
+
+    $lo = $MtuMinPayload
+    $hi = $MaxPayload
+    if (Test-PayloadFits $Ip $hi $state) {
+        $best = $hi
+    } elseif (-not (Test-PayloadFits $Ip $lo $state)) {
+        $r.Status = 'below'
+        $r.Silent = $state.Silent
+        return $r
+    } else {
+        # Invariant: $lo fits, $hi does not.
+        while ($hi - $lo -gt 1) {
+            $mid = [int][math]::Floor(($lo + $hi) / 2)
+            if (Test-PayloadFits $Ip $mid $state) { $lo = $mid } else { $hi = $mid }
+        }
+        $best = $lo
+    }
+
+    # Confirm: the size found passes 5 out of 5 and one byte more always fails.
+    $pass = 0
+    for ($k = 0; $k -lt 5; $k++) {
+        Write-Status "$($script:MtuStatus)  confirming $best bytes: ping $($k + 1)/5..."
+        if ((Send-DfPing $Ip $best 3) -eq 'ok') { $pass++ }
+    }
+    $nextOk = $false
+    if ($best -lt $MaxPayload) {
+        for ($k = 0; $k -lt 3; $k++) {
+            Write-Status "$($script:MtuStatus)  checking that $($best + 1) bytes fails: $($k + 1)/3..."
+            if ((Send-DfPing $Ip ($best + 1) 1) -eq 'ok') { $nextOk = $true; break }
+        }
+    }
+    $r.Payload = $best
+    $r.Mtu = $best + 28
+    $r.Silent = $state.Silent
+    if ($pass -lt 5 -or $nextOk) { $r.Status = 'unconfirmed' }
+    return $r
+}
+
+function Write-MtuRow($R) {
+    Write-Seg ('  ' + $R.Ip.PadRight(14)) White
+    switch ($R.Status) {
+        'blocked' {
+            Write-Seg ('-'.PadLeft(8) + '-'.PadLeft(7)) DarkGray
+            Write-Host "    $($G.Bad) no reply even to small pings (ICMP blocked)" -ForegroundColor Red
+        }
+        'below' {
+            Write-Seg ('-'.PadLeft(8) + '<1200'.PadLeft(7)) Yellow
+            Write-Host "    $($G.Warn) not even 1200 gets through" -ForegroundColor Yellow
+        }
+        default {
+            $color = if ($R.Status -eq 'ok') { 'White' } else { 'DarkGray' }
+            Write-Seg ([string]$R.Payload).PadLeft(8) $color
+            Write-Seg ([string]$R.Mtu).PadLeft(7) $color
+            $notes = @()
+            if ($R.Status -eq 'unconfirmed') { $notes += 'not confirmed (unstable), ignored' }
+            if ($R.Silent) { $notes += 'big packets dropped silently' }
+            if ($notes.Count -eq 0) { Write-Host "    $($G.Ok) confirmed" -ForegroundColor Green }
+            else { Write-Host ("    $($G.Warn) " + ($notes -join ', ')) -ForegroundColor Yellow }
+        }
+    }
+}
+
+function Get-InterfaceMtu([int]$Index, [string]$Family) {
+    try { return [int](Get-NetIPInterface -InterfaceIndex $Index -AddressFamily $Family -ErrorAction Stop).NlMtu } catch { return $null }
+}
+
+function Set-InterfaceMtu([string]$Alias, [string]$Family, [int]$Mtu, [string]$Store) {
+    $proto = if ($Family -eq 'IPv4') { 'ipv4' } else { 'ipv6' }
+    return (Invoke-Netsh @('interface', $proto, 'set', 'subinterface', $Alias, "mtu=$Mtu", "store=$Store"))
+}
+
+function Invoke-MtuTest($Backup, [bool]$CanRaise) {
+    # Finds the largest MTU of the current network. It leaves the MTU as it was: Apply sets the
+    # result afterwards (Set-ActiveMtu). Returns $null, or an object with Mtu ($null = do not change).
+    Write-Title 'MTU test'
+    $route = Get-ActiveRoute
+    $ad = $null
+    if ($route) { $ad = Get-NetAdapter -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue }
+    if (-not $ad) { Write-Warn2 'No active connection: skipping the MTU test.'; return $null }
+
+    $idx  = [int]$route.InterfaceIndex
+    $cur4 = Get-InterfaceMtu $idx 'IPv4'
+    $cur6 = Get-InterfaceMtu $idx 'IPv6'
+    $cur6Text = if ($null -ne $cur6) { [string]$cur6 } else { 'off' }
+    Write-Info "Adapter: $($ad.Name)  $($G.Dot)  current MTU: IPv4 $cur4, IPv6 $cur6Text"
+    Write-Info "Ping with Don't Fragment to $($MtuTargets -join ', ')  $($G.Dot)  MTU 1200-1500"
+
+    $res = [pscustomobject]@{ Mtu = $null; Alias = $ad.Name; Index = $idx; Guid = [string]$ad.InterfaceGuid; Cur4 = $cur4; Cur6 = $cur6 }
+    if ($null -eq $cur4) { Write-Warn2 'Could not read the current MTU: skipping the MTU test.'; return $res }
+
+    $maxPayload = 1472
+    $raised = $false
+    try {
+        if ($cur4 -lt 1500) {
+            if ($CanRaise) {
+                # Below 1500 Windows itself blocks the bigger packets, so the test could never find more.
+                if ($Backup -and -not $Backup.Mtu) {
+                    $Backup.Mtu = [ordered]@{ InterfaceGuid = $res.Guid; Alias = $res.Alias; IPv4 = $cur4; IPv6 = $cur6 }
+                }
+                if ((Set-InterfaceMtu $ad.Name 'IPv4' 1500 'active') -and (Get-InterfaceMtu $idx 'IPv4') -eq 1500) {
+                    $raised = $true
+                    Write-Info 'MTU raised to 1500 for the test only (otherwise Windows blocks the bigger packets).'
+                } else {
+                    $maxPayload = $cur4 - 28
+                    Write-Warn2 "Could not raise the MTU to 1500 for the test: testing up to $cur4 only."
+                }
+            } else {
+                $maxPayload = $cur4 - 28
+                Write-Info "The current MTU ($cur4) caps the test. Apply raises it to 1500 for a moment to test higher."
+            }
+        }
+        if ($maxPayload -lt $MtuMinPayload) {
+            Write-Warn2 "The current MTU ($cur4) is below 1200: left as is."
+            return $res
+        }
+
+        Write-Host ''
+        Write-Seg '  '
+        Write-Seg 'Target'.PadRight(14) DarkGray
+        Write-Seg 'Payload'.PadLeft(8) DarkGray
+        Write-Seg 'MTU'.PadLeft(7) DarkGray
+        Write-Host '    Note' -ForegroundColor DarkGray
+        Write-Host ('  ' + ($G.H * 76)) -ForegroundColor DarkGray
+
+        # Each row appears as soon as its target is done; meanwhile a status line shows each step.
+        $rows = @()
+        $i = 0
+        foreach ($ip in $MtuTargets) {
+            Write-Progress -Id 5 -Activity 'MTU test' -Status "$ip ($($i + 1)/$($MtuTargets.Count))" -PercentComplete ([int](100 * $i / $MtuTargets.Count))
+            $script:MtuStatus = "    $($i + 1)/$($MtuTargets.Count)  $ip"
+            $r = Measure-PathMtu $ip $maxPayload
+            Clear-Status
+            Write-MtuRow $r
+            $rows += $r
+            $i++
+        }
+        Write-Progress -Id 5 -Activity 'MTU test' -Completed
+        Write-Host ''
+        Write-Host "  Payload = largest ping that gets through without fragmenting  $($G.Dot)  MTU = payload + 28" -ForegroundColor DarkGray
+
+        $good = @($rows | Where-Object { $_.Status -eq 'ok' })
+        Write-Host ''
+        if (@($rows | Where-Object { $_.Status -eq 'blocked' }).Count -eq $rows.Count) {
+            Write-Warn2 'ICMP is blocked on this network (even small pings get no reply), so the MTU cannot be measured. Left as is.'
+            return $res
+        }
+        if (@($rows | Where-Object { $_.Status -eq 'below' }).Count -gt 0) {
+            Write-Warn2 'The path MTU is below 1200, which is unusual (VPN or a misconfigured router?). Left as is.'
+            return $res
+        }
+        if ($good.Count -eq 0) {
+            Write-Warn2 'The results could not be confirmed (unstable connection). MTU left as is; try again later.'
+            return $res
+        }
+        if (@($rows | Where-Object { $_.Silent }).Count -gt 0) {
+            Write-Info 'This network drops oversized packets without answering "too big": those were treated as too big.'
+        }
+        if ($good.Count -lt $rows.Count) { Write-Info "Some targets gave no usable result: using the other $($good.Count)." }
+
+        $mtu = [int](($good | Measure-Object -Property Mtu -Minimum).Minimum)
+        if ($mtu -ge 1500) {
+            $res.Mtu = 1500
+            Write-Ok 'MTU 1500 is already the maximum on this network.'
+        } elseif ($maxPayload -lt 1472 -and $mtu -ge $cur4) {
+            # Capped test: everything up to the current MTU gets through, but higher was not tested.
+            Write-Ok "Packets up to the current MTU ($cur4) get through. Apply tests above it."
+        } else {
+            $res.Mtu = $mtu
+            Write-Warn2 "Largest MTU on this network: $mtu (now $cur4)."
+            Write-Info "Apply sets it on IPv4 and IPv6 (IPv6 minimum 1280)." 4
+        }
+        Write-Info 'The MTU depends on the network: run it again when you change networks.'
+        return $res
+    } finally {
+        Write-Progress -Id 5 -Activity 'MTU test' -Completed
+        Clear-Status
+        # The test leaves nothing behind (also if it fails halfway).
+        if ($raised) { [void](Set-InterfaceMtu $ad.Name 'IPv4' $cur4 'active') }
+    }
+}
+
+function Set-ActiveMtu($Res, $Backup) {
+    $want = @{ IPv4 = [int]$Res.Mtu; IPv6 = [int][math]::Max(1280, [int]$Res.Mtu) }
+    $cur  = @{ IPv4 = $Res.Cur4; IPv6 = $Res.Cur6 }
+    Write-Section "MTU ($($Res.Alias))"
+    $todo = @(@('IPv4', 'IPv6') | Where-Object { $null -ne $cur[$_] -and $cur[$_] -ne $want[$_] })
+    if ($todo.Count -eq 0) { Write-Info "MTU: already $($want.IPv4)" 4; return }
+    foreach ($fam in $todo) {
+        $label = "MTU $fam"
+        if (-not $PSCmdlet.ShouldProcess($Res.Alias, "$label $($cur[$fam]) -> $($want[$fam])")) {
+            Write-Change $label ([string]$cur[$fam]) ([string]$want[$fam])
+            continue
+        }
+        if (-not $Backup.Mtu) {
+            $Backup.Mtu = [ordered]@{ InterfaceGuid = $Res.Guid; Alias = $Res.Alias; IPv4 = $Res.Cur4; IPv6 = $Res.Cur6 }
+        }
+        [void](Set-InterfaceMtu $Res.Alias $fam $want[$fam] 'persistent')
+        $now = Get-InterfaceMtu $Res.Index $fam
+        if ($now -eq $want[$fam]) { Write-Change $label ([string]$cur[$fam]) ([string]$want[$fam]) }
+        else { Write-Fail $label "was not applied (now: $now)" }
+    }
+}
+
+# ---------------------------------------------------------------- nagle on wi-fi
+
+function Test-WirelessAdapter($Adapter) {
+    return ([string]$Adapter.PhysicalMediaType -match '802\.11') -or ($Adapter.InterfaceDescription -match 'Wi-?Fi|Wireless|WLAN|802\.11')
+}
+
+function ConvertFrom-NetworkKeyName([string]$Name) {
+    # Wi-Fi keeps one TCP/IP subkey per network, named after the SSID in hex with the two digits of
+    # each byte swapped ("65F6461666F6E656..." = "Vodafone..."). Returns the SSID, or the raw name.
+    if ($Name -notmatch '^[0-9A-Fa-f]+$' -or $Name.Length % 2 -ne 0) { return $Name }
+    try {
+        $bytes = New-Object byte[] ($Name.Length / 2)
+        for ($i = 0; $i -lt $Name.Length; $i += 2) { $bytes[$i / 2] = [Convert]::ToByte("$($Name[$i + 1])$($Name[$i])", 16) }
+        $s = [Text.Encoding]::UTF8.GetString($bytes)
+        if ($s -notmatch '[\x00-\x1F]') { return $s }
+    } catch { }
+    return $Name
+}
+
+function Get-NagleKeys($Adapter) {
+    # The adapter's TCP/IP key (on Wi-Fi: the settings of the network it is connected to), plus on
+    # Wi-Fi one subkey per network it has been on. Returns objects with Path and Label.
+    $ifKey = "$TcpipKey\Interfaces\$($Adapter.InterfaceGuid)"
+    if (-not (Test-Path -LiteralPath $ifKey)) { return @() }
+    $keys = @([pscustomobject]@{ Path = $ifKey; Label = '' })
+    foreach ($k in @(Get-ChildItem -LiteralPath $ifKey -ErrorAction SilentlyContinue)) {
+        $keys += [pscustomobject]@{ Path = "$ifKey\$($k.PSChildName)"; Label = " (network $(ConvertFrom-NetworkKeyName $k.PSChildName))" }
+    }
+    return $keys
+}
+
+function Test-NagleSet([string]$Path) {
+    return (@($NagleTweaks | Where-Object { -not (Test-RegWanted $_ (Get-RegState $Path $_.Name)) }).Count -eq 0)
+}
+
+function Get-NetTuneTask($Task) {
+    # SilentlyContinue, not Stop + catch: a caught error still lands in the log as "TerminatingError".
+    try { return (Get-ScheduledTask -TaskPath $Task.Path -TaskName $Task.Name -ErrorAction SilentlyContinue) } catch { return $null }
+}
+
+function Remove-NetTuneTask($Task) {
+    # $true if the task is gone (or was not there).
+    if (-not (Get-NetTuneTask $Task)) { return $true }
+    try { Unregister-ScheduledTask -TaskPath $Task.Path -TaskName $Task.Name -Confirm:$false -ErrorAction Stop } catch { }
+    return (-not (Get-NetTuneTask $Task))
+}
+
+function Test-NagleKeeperCovers([string[]]$Guids) {
+    # The keeper lists the adapters it covers in its description.
+    $t = Get-NetTuneTask $NagleTask
+    if (-not $t) { return $false }
+    foreach ($guid in $Guids) { if ([string]$t.Description -notmatch [regex]::Escape($guid)) { return $false } }
+    return $true
+}
+
+function Register-NagleKeeper([string[]]$Guids) {
+    # Script run by the task: writes the Nagle values on the adapter key and on every network
+    # subkey. Twice, 30 s apart, because Windows may still be rebuilding the key when the event fires.
+    $sets = ($NagleTweaks | ForEach-Object {
+        "            New-ItemProperty -LiteralPath `$p -Name '$($_.Name)' -PropertyType $($_.Type) -Value $($_.Value) -Force | Out-Null"
+    }) -join "`n"
+    $list = ($Guids | ForEach-Object { "'$_'" }) -join ', '
+    $code = @"
+`$base = '$TcpipKey\Interfaces'
+for (`$round = 0; `$round -lt 2; `$round++) {
+    foreach (`$g in @($list)) {
+        `$k = Join-Path `$base `$g
+        if (-not (Test-Path -LiteralPath `$k)) { continue }
+        foreach (`$p in @(`$k) + @(Get-ChildItem -LiteralPath `$k -ErrorAction SilentlyContinue | ForEach-Object { `$_.PSPath })) {
+$sets
+        }
+    }
+    if (`$round -eq 0) { Start-Sleep -Seconds 30 }
+}
+"@
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $enc"
+
+    # Trigger: "network connected" (NetworkProfile, event 10000), 10 s later; and at startup.
+    $class = Get-CimClass -Namespace 'Root/Microsoft/Windows/TaskScheduler' -ClassName 'MSFT_TaskEventTrigger'
+    $onNet = New-CimInstance -CimClass $class -ClientOnly
+    $onNet.Enabled = $true
+    $onNet.Delay = 'PT10S'
+    $onNet.Subscription = '<QueryList><Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"><Select Path="Microsoft-Windows-NetworkProfile/Operational">*[System[(EventID=10000)]]</Select></Query></QueryList>'
+    $atBoot = New-ScheduledTaskTrigger -AtStartup
+
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+        -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+    $desc = "NetTune: writes the Nagle values (TcpAckFrequency, TCPNoDelay, TcpDelAckTicks) again when Wi-Fi connects to a network. Adapters: $($Guids -join ', '). Removed by NetTune -Mode Revert."
+    Register-ScheduledTask -TaskPath $NagleTask.Path -TaskName $NagleTask.Name -Action $action -Trigger @($onNet, $atBoot) `
+        -Principal $principal -Settings $settings -Description $desc -Force -ErrorAction Stop | Out-Null
+}
+
+# ---------------------------------------------------------------- after restart
+
+function Get-NetworkIdentity {
+    # Which network we are on: adapter, network profile name and gateway (no netsh: its text is localized).
+    $route = Get-ActiveRoute
+    if (-not $route) { return $null }
+    $profileName = ''
+    try { $profileName = [string](Get-NetConnectionProfile -InterfaceIndex $route.InterfaceIndex -ErrorAction Stop | Select-Object -First 1).Name } catch { }
+    $alias = [string]$route.InterfaceAlias
+    if (-not $alias) { try { $alias = [string](Get-NetAdapter -InterfaceIndex $route.InterfaceIndex -ErrorAction Stop).Name } catch { } }
+    return [pscustomobject]@{ InterfaceAlias = $alias; ProfileName = $profileName; Gateway = [string]$route.NextHop }
+}
+
+function Format-NetworkIdentity($Net) {
+    if (-not $Net) { return 'no connection' }
+    return "$($Net.InterfaceAlias) $($G.Dot) $($Net.ProfileName) $($G.Dot) gateway $($Net.Gateway)"
+}
+
+function Save-PendingState($Before, [string]$BackupPath) {
+    # What the test after the restart needs: the "before" results, the same servers and the network.
+    if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -WhatIf:$false | Out-Null }
+    $state = [ordered]@{
+        Created      = (Get-Date).ToString('s')
+        Tool         = "NetTune $Version"
+        BackupFile   = $BackupPath
+        Network      = Get-NetworkIdentity
+        Count        = $Count
+        GameTargets  = @($script:GameTargets)
+        ExtraTargets = @($ExtraTargets)
+        Before       = @($Before | Where-Object { $_ } | Select-Object * -ExcludeProperty Samples)
+    }
+    $state | ConvertTo-Json -Depth 6 | Out-File -FilePath $PendingFile -Encoding UTF8 -WhatIf:$false
+}
+
+function Register-AfterRestartTask {
+    # One-time task at the next logon of this user: highest rights (no UAC prompt), interactive
+    # (the window shows up), also on battery. PowerShell stays open (-NoExit), so no time limit.
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $arg = "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Mode Test -AfterRestart"
+    if ($Ascii) { $arg += ' -Ascii' }
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $Root
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+    $desc = "NetTune: test after the restart, runs once and deletes itself. Created $((Get-Date).ToString('s'))."
+    Register-ScheduledTask -TaskPath $AfterTask.Path -TaskName $AfterTask.Name -Action $action -Trigger $trigger `
+        -Principal $principal -Settings $settings -Description $desc -Force -ErrorAction Stop | Out-Null
+}
+
+function Get-TaskCreated($Task) {
+    $m = [regex]::Match([string]$Task.Description, 'Created (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)')
+    if ($m.Success) { return [datetime]$m.Groups[1].Value }
+    return $null
+}
+
+function Clear-StalePending {
+    # An after-restart run older than 24 h (no restart happened): removed without running it.
+    $limit = (Get-Date).AddHours(-24)
+    $stale = $false
+    if (Test-Path $PendingFile) {
+        $created = $null
+        try { $created = [datetime](Get-Content -Path $PendingFile -Raw -Encoding UTF8 | ConvertFrom-Json).Created } catch { }
+        if (-not $created) { $created = (Get-Item $PendingFile).LastWriteTime }
+        if ($created -lt $limit) { $stale = $true }
+    }
+    $task = Get-NetTuneTask $AfterTask
+    if ($task) {
+        $tc = Get-TaskCreated $task
+        if ($tc -and $tc -lt $limit) { $stale = $true }
+    }
+    if (-not $stale) { return }
+    if (-not $PSCmdlet.ShouldProcess('after-restart test older than 24 h', 'Remove the scheduled task and the state file')) { return }
+    Write-Host ''
+    if (Test-Path $PendingFile) { Remove-Item -Path $PendingFile -Force -ErrorAction SilentlyContinue }
+    if (Remove-NetTuneTask $AfterTask) {
+        Write-Info 'Removed an after-restart test older than 24 h (the PC was not restarted). Nothing was run.'
+    } else {
+        Write-Warn2 'An after-restart test older than 24 h is still scheduled: run NetTune as admin once to remove it.'
+    }
+}
+
+function Wait-Countdown([int]$Seconds) {
+    # Lets the programs that start with Windows settle down. Any key starts right away.
+    $canKey = $true
+    try {
+        if ([Console]::IsInputRedirected) { $canKey = $false }
+        else { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } }
+    } catch { $canKey = $false }
+    Write-Info "Waiting $Seconds s for the programs that start with Windows to settle down."
+    for ($s = $Seconds; $s -gt 0; $s--) {
+        $hint = if ($canKey) { '   (press any key to start now)' } else { '' }
+        Write-Status "    starting in $s s$hint"
+        for ($k = 0; $k -lt 10; $k++) {
+            if ($canKey) {
+                try {
+                    if ([Console]::KeyAvailable) {
+                        [void][Console]::ReadKey($true)
+                        Clear-Status
+                        Write-Info 'Starting now.'
+                        return
+                    }
+                } catch { $canKey = $false }
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    Clear-Status
+}
+
+function Invoke-AfterRestart {
+    # Returns $false if there is nothing saved (the caller then runs a normal Test).
+    # 1) The task goes first, so this runs only once even if the rest fails.
+    if (-not (Remove-NetTuneTask $AfterTask)) {
+        Write-Host ''
+        Write-Warn2 'Could not delete the scheduled task "NetTune after restart". Delete it in Task Scheduler (folder NetTune).'
+    }
+    $state = $null
+    try {
+        if (Test-Path $PendingFile) { $state = Get-Content -Path $PendingFile -Raw -Encoding UTF8 | ConvertFrom-Json }
+    } catch {
+        Write-Warn2 "Could not read logs\pending-after-restart.json: $($_.Exception.Message)"
+    }
+    try {
+        if (-not $state) {
+            Write-Host ''
+            Write-Warn2 'No saved "before" test was found: running a normal test instead.'
+            return $false
+        }
+
+        Write-Title 'After the restart'
+        $bf = [string](Get-BackupProp $state 'BackupFile')
+        $bfText = if ($bf) { "backups\$(Split-Path $bf -Leaf)" } else { '-' }
+        Write-Info "Apply: $(Get-BackupProp $state 'Created')  $($G.Dot)  $(Get-BackupProp $state 'Tool')  $($G.Dot)  backup: $bfText"
+
+        # 2) The network has to be back (at most 2 minutes).
+        Write-Info 'Waiting for the network (up to 2 min)...'
+        if (Wait-Network 120) { Write-Ok 'Network is back.' }
+        else { Write-Warn2 'The network did not come back within 2 minutes. Testing anyway.' }
+
+        # 3) Startup programs settle down.
+        Wait-Countdown 90
+
+        # 4) Same network as Apply? If not, the comparison means nothing (but the test still runs).
+        $then = Get-BackupProp $state 'Network'
+        $now = Get-NetworkIdentity
+        $same = $then -and $now -and ([string]$then.Gateway -eq [string]$now.Gateway) -and
+                ([string]$then.ProfileName -eq [string]$now.ProfileName) -and ([string]$then.InterfaceAlias -eq [string]$now.InterfaceAlias)
+        if ($same) {
+            Write-Ok "Same network as Apply: $(Format-NetworkIdentity $now)"
+        } else {
+            $lines = @()
+            $lines += ,@($G.Bad, 'Red', 'This is NOT the network Apply ran on.')
+            $lines += ,@(' ', 'Gray', "Apply: $(Format-NetworkIdentity $then)")
+            $lines += ,@(' ', 'Gray', "Now:   $(Format-NetworkIdentity $now)")
+            $lines += ,@($G.Warn, 'Yellow', 'The before / after comparison is NOT valid. Testing anyway.')
+            Write-Box 'DIFFERENT NETWORK' $lines 'Red'
+        }
+
+        # 5) Everything applied? Then the same test, on the same servers, against the saved "before".
+        $pending = Show-AdapterState
+        $script:GameTargets = @(Get-BackupProp $state 'GameTargets' | Where-Object { $_ })
+        $savedCount = Get-BackupProp $state 'Count'
+        if ($savedCount) { $script:Count = [int]$savedCount }
+        $after = Invoke-NetTest 'Test after the restart'
+        $before = @(Get-BackupProp $state 'Before' | Where-Object { $_ })
+        if ($before.Count -gt 0) { Show-Comparison $before $after }
+
+        $lines = @()
+        if ($before.Count -eq 0) { $lines += ,@($G.Info, 'DarkGray', 'Apply ran with -SkipTest: there is no "before" to compare with.') }
+        elseif ($same) { $lines += ,@($G.Ok, 'Green', 'Before vs after includes the registry values (the PC was restarted).') }
+        else { $lines += ,@($G.Warn, 'Yellow', 'Different network: the comparison is not valid.') }
+        if ($pending -eq 0) { $lines += ,@($G.Ok, 'Green', 'Every tweak is in place (all marked with a check above).') }
+        else { $lines += ,@($G.Warn, 'Yellow', "$pending setting(s) are not as Apply left them (marked with $($G.Warn) above).") }
+        $lines += ,@($G.Info, 'DarkGray', 'This test ran once; the scheduled task is already deleted.')
+        $lines += ,@($G.Arrow, 'Cyan', 'To undo everything: .\NetTune.ps1 -Mode Revert')
+        Write-Box 'After the restart' $lines 'DarkCyan'
+        return $true
+    } finally {
+        if (Test-Path $PendingFile) { Remove-Item -Path $PendingFile -Force -ErrorAction SilentlyContinue -WhatIf:$false }
+    }
+}
+
 # ---------------------------------------------------------------- adapter state
 
 function Show-AdapterState {
     # Shows the state and returns how many tweaks Apply would still make.
     Write-Title 'Current state'
     $pending = 0
+    $tcpOn = -not $NoTcp
 
     $wifiPlan = Get-WifiPowerPlan
     if ($wifiPlan) {
@@ -1258,12 +2159,32 @@ function Show-AdapterState {
         }
     }
 
+    $note = if ($tcpOn) { "template $TcpTemplate" } else { '-NoTcp: left as is' }
+    Write-Section 'TCP (global)' $note
+    foreach ($t in $TcpGlobalTweaks) { $pending += Write-GlobalState 'tcp' $t $tcpOn }
+    foreach ($n in @(@('CongestionProvider', 'Congestion provider'), @('EcnCapability', 'ECN'))) {
+        $v = Get-TcpGlobalValue $n[0]
+        if ($null -eq $v) { $v = 'unknown' }
+        Write-KV $n[1] $v 'none' 'left as is'
+    }
+    foreach ($t in $OffloadGlobalTweaks) { $pending += Write-GlobalState 'offload' $t $tcpOn }
+
+    $note = if ($tcpOn) { 'takes effect after a restart' } else { '-NoTcp: left as is' }
+    Write-Section 'Registry' $note
+    foreach ($t in $RegTweaks) { $pending += Write-RegState $t $t.Path $t.Label $tcpOn }
+
     $adapters = @(Get-TargetAdapters)
     if ($adapters.Count -eq 0) { Write-Warn2 'No physical adapter found.'; return $pending }
 
     foreach ($a in $adapters) {
         Write-AdapterHeader $a
-        if ([string]$a.Status -eq 'Up') { Write-KV 'Speed' ([string]$a.LinkSpeed) }
+        if ([string]$a.Status -eq 'Up') {
+            Write-KV 'Speed' ([string]$a.LinkSpeed)
+            $m4 = Get-InterfaceMtu $a.ifIndex 'IPv4'
+            $m6 = Get-InterfaceMtu $a.ifIndex 'IPv6'
+            $m6Text = if ($null -ne $m6) { [string]$m6 } else { 'off' }
+            Write-KV 'MTU' "IPv4 $m4, IPv6 $m6Text"
+        }
         Write-KV 'Driver' ("{0} ({1})" -f $a.DriverVersion, $a.DriverDate)
 
         $classKey = Get-AdapterClassKey ([string]$a.InterfaceGuid)
@@ -1279,27 +2200,80 @@ function Show-AdapterState {
             } catch { }
         }
 
+        $props = @(Get-NetAdapterAdvancedProperty -Name $a.Name -ErrorAction SilentlyContinue)
+
+        # Offloads (TCP Optimizer group)
+        $rss = Get-RssState $a.Name
+        if ($null -eq $rss) { Write-KV 'RSS' 'not supported by this adapter' }
+        elseif ($rss) { Write-KV 'RSS' 'on' 'ok' }
+        elseif ($tcpOn) { Write-KV 'RSS' 'off' 'warn' 'on'; $pending++ }
+        else { Write-KV 'RSS' 'off' }
+
         try {
             $rsc = Get-NetAdapterRsc -Name $a.Name -ErrorAction Stop
-            if ($rsc.IPv4Enabled -or $rsc.IPv6Enabled) {
-                Write-KV 'RSC' ("on (IPv4 {0}, IPv6 {1})" -f $rsc.IPv4Enabled, $rsc.IPv6Enabled) 'warn' 'off'
+            $rscText = "on (IPv4 {0}, IPv6 {1})" -f $rsc.IPv4Enabled, $rsc.IPv6Enabled
+            if (-not ($rsc.IPv4Enabled -or $rsc.IPv6Enabled)) { Write-KV 'RSC' 'off' 'ok' }
+            elseif ($tcpOn) { Write-KV 'RSC' $rscText 'warn' 'off'; $pending++ }
+            else { Write-KV 'RSC' $rscText }
+        } catch { Write-KV 'RSC' 'not supported by this adapter' }
+
+        $lso = Get-LsoState $a.Name
+        if (-not $lso) { Write-KV 'LSO' 'not supported by this adapter' }
+        elseif (-not (Test-LsoOn $lso)) { Write-KV 'LSO' 'off' 'ok' }
+        elseif (-not (Test-HasKeyword $props $KwLso)) { Write-KV 'LSO' 'on (fixed by the driver)' }
+        elseif ($tcpOn) { Write-KV 'LSO' 'on' 'warn' 'off'; $pending++ }
+        else { Write-KV 'LSO' 'on' }
+
+        $ck = Get-ChecksumState $a.Name
+        if (-not $ck) { Write-KV 'Checksum offload' 'not supported by this adapter' }
+        else {
+            $off = @(Get-ChecksumOff $ck)
+            if ($off.Count -eq 0) { Write-KV 'Checksum offload' 'on' 'ok' }
+            elseif (-not (Test-HasKeyword $props $KwChecksum)) { Write-KV 'Checksum offload' "off for $($off -join ', ') (fixed by the driver)" }
+            elseif ($tcpOn) { Write-KV 'Checksum offload' "off for $($off -join ', ')" 'warn' 'on'; $pending++ }
+            else { Write-KV 'Checksum offload' "off for $($off -join ', ')" }
+        }
+
+        # Nagle (registry, per adapter). On Wi-Fi the adapter key holds the current network's settings,
+        # so the other networks' subkeys and the keeper task are shown too.
+        $nKeys = @(Get-NagleKeys $a)
+        if ($nKeys.Count -gt 0) {
+            foreach ($t in $NagleTweaks) { $pending += Write-RegState $t $nKeys[0].Path $t.Name $tcpOn }
+        }
+        if (Test-WirelessAdapter $a) {
+            $subs = @($nKeys | Select-Object -Skip 1)
+            if ($subs.Count -gt 0) {
+                $okN = @($subs | Where-Object { Test-NagleSet $_.Path }).Count
+                $txt = "$okN of $($subs.Count) set"
+                if ($okN -eq $subs.Count) { Write-KV 'Nagle, other networks' $txt 'ok' }
+                elseif ($tcpOn) { Write-KV 'Nagle, other networks' $txt 'warn' 'all'; $pending++ }
+                else { Write-KV 'Nagle, other networks' $txt }
+            }
+            if (Test-NagleKeeperCovers @([string]$a.InterfaceGuid)) {
+                Write-KV 'Nagle keeper (task)' 'on, rewrites it on every network change' 'ok'
+            } elseif (-not (Test-IsAdmin) -and -not (Get-NetTuneTask $NagleTask)) {
+                Write-KV 'Nagle keeper (task)' 'not found (or readable as admin only)'
+            } elseif ($tcpOn) {
+                Write-KV 'Nagle keeper (task)' 'missing' 'warn' 'scheduled task'
                 $pending++
             } else {
-                Write-KV 'RSC' 'off' 'ok'
+                Write-KV 'Nagle keeper (task)' 'missing'
             }
-        } catch { }
+        }
 
-        $props = @(Get-NetAdapterAdvancedProperty -Name $a.Name -ErrorAction SilentlyContinue)
+        # Driver advanced properties, found by RegistryKeyword (DisplayName changes with the Windows language).
         foreach ($p in $props) {
             foreach ($r in $Rules) {
-                if ($p.DisplayName -match $r.Display) {
-                    $target = @($p.ValidDisplayValues) | Where-Object { $_ -match $r.Want } | Select-Object -First 1
-                    if (-not $target) {
+                if ($p.RegistryKeyword -match $r.Keyword) {
+                    $valid = @($p.ValidRegistryValues | ForEach-Object { [string]$_ })
+                    $cur = [string](@($p.RegistryValue)[0])
+                    $i = [array]::IndexOf($valid, $r.Want)
+                    if ($i -lt 0) {
                         Write-KV $p.DisplayName $p.DisplayValue
-                    } elseif ($p.DisplayValue -eq $target) {
+                    } elseif ($cur -eq $r.Want) {
                         Write-KV $p.DisplayName $p.DisplayValue 'ok'
                     } else {
-                        Write-KV $p.DisplayName $p.DisplayValue 'warn' $target
+                        Write-KV $p.DisplayName $p.DisplayValue 'warn' ([string]@($p.ValidDisplayValues)[$i])
                         $pending++
                     }
                     break
@@ -1322,26 +2296,60 @@ function Show-AdapterState {
 
 # ---------------------------------------------------------------- backup
 
+function Get-StaticDns([string]$Stack, [string]$Guid) {
+    # The static DNS of one family, as Windows keeps it: NameServer, or (Wi-Fi) ProfileNameServer,
+    # the static DNS of the network it is connected to (Wi-Fi keeps one per network). Reading only
+    # NameServer saw "empty" on Wi-Fi and Revert then set DHCP instead of the old static DNS.
+    # Value '' = automatic (DHCP).
+    $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$Stack\Parameters\Interfaces\$Guid"
+    foreach ($n in @('NameServer', 'ProfileNameServer')) {
+        $s = Get-RegState $k $n
+        if ($s.Exists -and ([string]$s.Value).Trim()) { return [pscustomobject]@{ Value = ([string]$s.Value).Trim(); Source = $n } }
+    }
+    return [pscustomobject]@{ Value = ''; Source = '' }
+}
+
 function Get-DnsBackup($Adapter) {
-    $guid = $Adapter.InterfaceGuid
-    $v4 = ''
-    $v6 = ''
-    try { $v4 = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$guid" -Name NameServer -ErrorAction Stop).NameServer } catch { }
-    try { $v6 = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\$guid" -Name NameServer -ErrorAction Stop).NameServer } catch { }
-    return [pscustomobject]@{ IPv4 = [string]$v4; IPv6 = [string]$v6 }
+    $guid = [string]$Adapter.InterfaceGuid
+    $v4 = Get-StaticDns 'Tcpip' $guid
+    $v6 = Get-StaticDns 'Tcpip6' $guid
+    # IPv4 / IPv6 are what Revert reads; the *Source fields only say where they came from.
+    return [pscustomobject]@{ IPv4 = $v4.Value; IPv6 = $v6.Value; IPv4Source = $v4.Source; IPv6Source = $v6.Source }
 }
 
 function Save-Backup($Data) {
     if (-not (Test-Path $BackupDir)) { New-Item -ItemType Directory -Path $BackupDir -WhatIf:$false | Out-Null }
     $file = Join-Path $BackupDir "backup-$Stamp.json"
-    $Data | ConvertTo-Json -Depth 6 | Out-File -FilePath $file -Encoding UTF8
+    $Data | ConvertTo-Json -Depth 6 | Out-File -FilePath $file -Encoding UTF8 -WhatIf:$false
     return $file
+}
+
+function Get-BackupProp($Obj, [string]$Name) {
+    # Older backups do not have the newer fields; with StrictMode they have to be read like this.
+    if ($null -eq $Obj) { return $null }
+    $p = $Obj.PSObject.Properties[$Name]
+    if ($p) { return $p.Value }
+    return $null
+}
+
+function Read-RestartAnswer {
+    # "Restart now?" with No as the default. Without a console to answer, it is always No.
+    try { if ([Console]::IsInputRedirected) { return $false } } catch { }
+    try { $ans = Read-Host "  Restart now? (y/N)" } catch { return $false }
+    return ([string]$ans -match '^\s*[yYsS]')
 }
 
 # ---------------------------------------------------------------- apply
 
 function Invoke-Apply {
-    Assert-Admin
+    if ($WhatIfPreference) {
+        if (-not (Test-IsAdmin)) {
+            Write-Host ''
+            Write-Warn2 'Not running as administrator: the dry run works, but a few values are readable as admin only.'
+        }
+    } else {
+        Assert-Admin
+    }
 
     $before = $null
     if (-not $SkipTest) { $before = Invoke-NetTest 'Test before the tweaks' }
@@ -1378,18 +2386,29 @@ function Invoke-Apply {
     if ($adapters.Count -eq 0) { throw 'No physical adapter found.' }
 
     $backup = [ordered]@{
-        Created  = (Get-Date).ToString('s')
-        Tool     = "NetTune $Version"
-        Computer = $env:COMPUTERNAME
+        Created       = (Get-Date).ToString('s')
+        Tool          = "NetTune $Version"
+        Computer      = $env:COMPUTERNAME
         WifiPowerPlan = $null
-        Adapters = @()
+        TcpGlobal     = New-Object 'System.Collections.Generic.List[object]'
+        OffloadGlobal = New-Object 'System.Collections.Generic.List[object]'
+        Registry      = New-Object 'System.Collections.Generic.List[object]'
+        Mtu           = $null
+        NagleKeeper   = $null
+        Adapters      = @()
     }
-
-    Write-Title 'Applying tweaks'
     $file = $null
+    $toRestart = New-Object 'System.Collections.Generic.List[object]'
+    $wifiGuids = New-Object 'System.Collections.Generic.List[string]'
 
     # The backup is saved in the finally block: if a tweak fails halfway, what was already changed is recorded.
     try {
+
+    # MTU test first, while the connection is untouched. It leaves the MTU as it was; the result is set below.
+    $mtuRes = $null
+    if (-not $NoMtu) { $mtuRes = Invoke-MtuTest $backup (-not $WhatIfPreference) }
+
+    Write-Title 'Applying tweaks'
 
     # 0) Wi-Fi power saving in the Windows power plan (plugged in and on battery)
     $wifiPlan = Get-WifiPowerPlan
@@ -1401,11 +2420,26 @@ function Invoke-Apply {
             $from = "plugged in: $(Format-WifiPower $wifiPlan.AC), battery: $(Format-WifiPower $wifiPlan.DC)"
             if ($PSCmdlet.ShouldProcess('Power plan', "Wi-Fi power saving: $from -> Maximum performance")) {
                 Set-WifiPowerPlan -Scheme $wifiPlan.Scheme -AC 0 -DC 0
+                $now = Get-WifiPowerPlan
+                if ($now -and $now.AC -eq 0 -and $now.DC -eq 0) { Write-Change 'Wi-Fi power saving' $from 'Maximum performance' }
+                else { Write-Fail 'Wi-Fi power saving' 'was not applied' }
+            } else {
+                Write-Change 'Wi-Fi power saving' $from 'Maximum performance'
             }
-            Write-Change 'Wi-Fi power saving' $from 'Maximum performance'
         } else {
             Write-Info 'Wi-Fi power saving: already at maximum performance' 4
         }
+    }
+
+    # 1) TCP Optimizer-style globals and registry (-NoTcp skips them).
+    #    Heuristics come first: changed after auto-tuning, they can override it.
+    if (-not $NoTcp) {
+        Write-Section 'TCP (global)' "template $TcpTemplate"
+        foreach ($t in $TcpGlobalTweaks) { Invoke-GlobalTweak 'tcp' $t $backup.TcpGlobal }
+        foreach ($t in $OffloadGlobalTweaks) { Invoke-GlobalTweak 'offload' $t $backup.OffloadGlobal }
+
+        Write-Section 'Registry' 'takes effect after a restart'
+        foreach ($t in $RegTweaks) { Invoke-RegTweak $t $t.Path $t.Label $backup.Registry }
     }
 
     foreach ($a in $adapters) {
@@ -1417,14 +2451,18 @@ function Invoke-Apply {
             InterfaceGuid        = [string]$a.InterfaceGuid
             PnPCapabilities      = $null
             Rsc                  = $null
+            Rss                  = $null
+            Lso                  = $null
+            Checksum             = $null
             Advanced             = @()
             Dns                  = $null
         }
         # Goes into the backup right away (it is a reference, the changes below end up there).
         $backup.Adapters += $entry
         $changed = $false
+        $props = @(Get-NetAdapterAdvancedProperty -Name $a.Name -ErrorAction SilentlyContinue)
 
-        # 1) Let Windows turn the adapter off to save power
+        # 2) Let Windows turn the adapter off to save power
         #    -> PnPCapabilities = 24 in the adapter's key (only takes effect after a PC restart)
         $classKey = Get-AdapterClassKey ([string]$a.InterfaceGuid)
         if (-not $classKey) {
@@ -1459,7 +2497,7 @@ function Invoke-Apply {
                         Write-Change 'Windows may turn it off' (Format-PnPCap $old) (Format-PnPCap $now) 'restart the PC'
                         $script:RebootNeeded = $true
                     } else {
-                        Write-Warn2 "Power management: PnPCapabilities ended up as '$(Format-PnPCap $now)' (expected $PnPCapOff)" 4
+                        Write-Fail 'Windows may turn it off' "PnPCapabilities ended up as '$(Format-PnPCap $now)' (expected $PnPCapOff)"
                     }
                 } else {
                     Write-Change 'Windows may turn it off' (Format-PnPCap $old) (Format-PnPCap $PnPCapOff) 'restart the PC'
@@ -1467,39 +2505,112 @@ function Invoke-Apply {
             }
         }
 
-        # 2) RSC
-        try {
-            $rsc = Get-NetAdapterRsc -Name $a.Name -ErrorAction Stop
-            if ($rsc.IPv4Enabled -or $rsc.IPv6Enabled) {
-                $entry.Rsc = [ordered]@{ IPv4 = [bool]$rsc.IPv4Enabled; IPv6 = [bool]$rsc.IPv6Enabled }
-                if ($PSCmdlet.ShouldProcess($a.Name, 'Disable RSC')) {
-                    Disable-NetAdapterRsc -Name $a.Name -NoRestart -ErrorAction Stop
-                    $changed = $true
-                }
-                Write-Change 'RSC' 'on' 'off'
-            } else {
+        # 3) Offloads (TCP Optimizer group). All with -NoRestart: the adapter restarts once, at the end.
+        if (-not $NoTcp) {
+            # RSC -> off
+            $rsc = $null
+            try { $rsc = Get-NetAdapterRsc -Name $a.Name -ErrorAction Stop } catch { }
+            if (-not $rsc) {
+                Write-Info 'RSC: not supported by this adapter' 4
+            } elseif (-not ($rsc.IPv4Enabled -or $rsc.IPv6Enabled)) {
                 Write-Info 'RSC: already off' 4
+            } elseif ($PSCmdlet.ShouldProcess($a.Name, 'Disable RSC')) {
+                $entry.Rsc = [ordered]@{ IPv4 = [bool]$rsc.IPv4Enabled; IPv6 = [bool]$rsc.IPv6Enabled }
+                try { Disable-NetAdapterRsc -Name $a.Name -NoRestart -ErrorAction Stop } catch { }
+                $now = $null
+                try { $now = Get-NetAdapterRsc -Name $a.Name -ErrorAction Stop } catch { }
+                if ($now -and -not ($now.IPv4Enabled -or $now.IPv6Enabled)) { Write-Change 'RSC' 'on' 'off'; $changed = $true }
+                else { Write-Unsupported 'RSC' 'the driver did not accept it' }
+            } else {
+                Write-Change 'RSC' 'on' 'off'
             }
-        } catch {
-            Write-Info 'RSC: not supported by this adapter' 4
+
+            # RSS -> on
+            $rss = Get-RssState $a.Name
+            if ($null -eq $rss) {
+                Write-Info 'RSS: not supported by this adapter' 4
+            } elseif ($rss) {
+                Write-Info 'RSS: already on' 4
+            } elseif ($PSCmdlet.ShouldProcess($a.Name, 'Enable RSS')) {
+                $entry.Rss = [ordered]@{ Enabled = $false }
+                try { Enable-NetAdapterRss -Name $a.Name -NoRestart -ErrorAction Stop } catch { }
+                if (Get-RssState $a.Name) { Write-Change 'RSS' 'off' 'on'; $changed = $true }
+                else { Write-Unsupported 'RSS' 'the driver did not accept it' }
+            } else {
+                Write-Change 'RSS' 'off' 'on'
+            }
+
+            # Checksum offload -> only make sure it is on
+            $ck = Get-ChecksumState $a.Name
+            if (-not $ck) {
+                Write-Info 'Checksum offload: not supported by this adapter' 4
+            } else {
+                $off = @(Get-ChecksumOff $ck)
+                if ($off.Count -eq 0) {
+                    Write-Info 'Checksum offload: already on' 4
+                } elseif (-not (Test-HasKeyword $props $KwChecksum)) {
+                    Write-Info "Checksum offload: off for $($off -join ', '), fixed by the driver (cannot be changed)" 4
+                } elseif ($PSCmdlet.ShouldProcess($a.Name, 'Enable checksum offload')) {
+                    $entry.Checksum = $ck
+                    try { Enable-NetAdapterChecksumOffload -Name $a.Name -NoRestart -ErrorAction Stop } catch { }
+                    $now = Get-ChecksumState $a.Name
+                    $offNow = @()
+                    if ($now) { $offNow = @(Get-ChecksumOff $now) }
+                    if ($now -and $offNow.Count -eq 0) { Write-Change 'Checksum offload' "off for $($off -join ', ')" 'on'; $changed = $true }
+                    elseif ($now -and $offNow.Count -lt $off.Count) { Write-Change 'Checksum offload' "off for $($off -join ', ')" "on (still off: $($offNow -join ', '))"; $changed = $true }
+                    else { Write-Unsupported 'Checksum offload' 'the driver did not accept it' }
+                } else {
+                    Write-Change 'Checksum offload' "off for $($off -join ', ')" 'on'
+                }
+            }
+
+            # LSO -> off
+            $lso = Get-LsoState $a.Name
+            if (-not $lso) {
+                Write-Info 'LSO: not supported by this adapter' 4
+            } elseif (-not (Test-LsoOn $lso)) {
+                Write-Info 'LSO: already off' 4
+            } elseif (-not (Test-HasKeyword $props $KwLso)) {
+                Write-Info 'LSO: on, fixed by the driver (cannot be changed)' 4
+            } elseif ($PSCmdlet.ShouldProcess($a.Name, 'Disable LSO')) {
+                $entry.Lso = [ordered]@{ V1IPv4 = $lso.V1IPv4; IPv4 = $lso.IPv4; IPv6 = $lso.IPv6 }
+                try { Disable-NetAdapterLso -Name $a.Name -NoRestart -ErrorAction Stop } catch { }
+                $now = Get-LsoState $a.Name
+                if ($now -and -not (Test-LsoOn $now)) { Write-Change 'LSO' 'on' 'off'; $changed = $true }
+                else { Write-Unsupported 'LSO' 'the driver did not accept it' }
+            } else {
+                Write-Change 'LSO' 'on' 'off'
+            }
+
+            # Nagle: registry of this adapter's TCP/IP interface (also for disconnected adapters).
+            # On Wi-Fi also every network subkey, and the keeper task (below) covers new networks.
+            $nKeys = @(Get-NagleKeys $a)
+            if ($nKeys.Count -eq 0) {
+                Write-Info 'Nagle: this adapter has no TCP/IP settings key yet, skipped' 4
+            } else {
+                foreach ($k in $nKeys) {
+                    foreach ($t in $NagleTweaks) { Invoke-RegTweak $t $k.Path "$($t.Name)$($k.Label)" $backup.Registry }
+                }
+            }
+            if (Test-WirelessAdapter $a) { $wifiGuids.Add([string]$a.InterfaceGuid) }
         }
 
-        # 3) Driver advanced properties
-        $props = @(Get-NetAdapterAdvancedProperty -Name $a.Name -ErrorAction SilentlyContinue)
+        # 4) Driver advanced properties, by RegistryKeyword (not DisplayName: it changes with the language).
         foreach ($p in $props) {
             $rule = $null
-            foreach ($r in $Rules) { if ($p.DisplayName -match $r.Display) { $rule = $r; break } }
+            foreach ($r in $Rules) { if ($p.RegistryKeyword -match $r.Keyword) { $rule = $r; break } }
             if (-not $rule) { continue }
 
-            $valid = @($p.ValidDisplayValues)
+            $valid = @($p.ValidRegistryValues | ForEach-Object { [string]$_ })
             if ($valid.Count -eq 0) { continue }
-            $target = $valid | Where-Object { $_ -match $rule.Want } | Select-Object -First 1
-            if (-not $target) {
-                Write-Warn2 "$($p.DisplayName): could not find an 'off' value (options: $($valid -join ' | '))" 4
+            $i = [array]::IndexOf($valid, $rule.Want)
+            if ($i -lt 0) {
+                Write-Warn2 "$($p.DisplayName): no 'off' value (options: $(@($p.ValidDisplayValues) -join ' | '))" 4
                 continue
             }
-            if ($p.DisplayValue -eq $target) {
-                Write-Info "$($p.DisplayName): already '$target'" 4
+            $target = [string]@($p.ValidDisplayValues)[$i]
+            if ([string](@($p.RegistryValue)[0]) -eq $rule.Want) {
+                Write-Info "$($p.DisplayName): already '$($p.DisplayValue)'" 4
                 continue
             }
 
@@ -1510,13 +2621,24 @@ function Invoke-Apply {
                 DisplayValue    = $p.DisplayValue
             }
             if ($PSCmdlet.ShouldProcess($a.Name, "$($p.DisplayName): '$($p.DisplayValue)' -> '$target'")) {
-                Set-NetAdapterAdvancedProperty -Name $a.Name -RegistryKeyword $p.RegistryKeyword -DisplayValue $target -NoRestart -ErrorAction Stop
-                $changed = $true
+                $err = $null
+                try { Set-NetAdapterAdvancedProperty -Name $a.Name -RegistryKeyword $p.RegistryKeyword -RegistryValue $rule.Want -NoRestart -ErrorAction Stop } catch { $err = $_.Exception.Message }
+                $now = $null
+                try { $now = Get-NetAdapterAdvancedProperty -Name $a.Name -RegistryKeyword $p.RegistryKeyword -ErrorAction Stop } catch { }
+                if ($now -and [string](@($now.RegistryValue)[0]) -eq $rule.Want) {
+                    Write-Change $p.DisplayName $p.DisplayValue $now.DisplayValue
+                    $changed = $true
+                } elseif ($err) {
+                    Write-Fail $p.DisplayName $err
+                } else {
+                    Write-Fail $p.DisplayName 'was not applied'
+                }
+            } else {
+                Write-Change $p.DisplayName $p.DisplayValue $target
             }
-            Write-Change $p.DisplayName $p.DisplayValue $target
         }
 
-        # 4) DNS: IPv4 and IPv6 set by hand, each family separately, and confirmed by reading them back.
+        # 5) DNS: IPv4 and IPv6 set by hand, each family separately, and confirmed by reading them back.
         #    $dnsV6Fix: only the IPv6, and only on adapters whose IPv4 already is that DNS.
         $dnsPreset = if ($dnsChoice) { $dnsChoice } else { $dnsV6Fix }
         if ($dnsPreset) {
@@ -1550,7 +2672,7 @@ function Invoke-Apply {
                             Write-Change "DNS $($fam[0])" $from $to
                         } else {
                             $got = if ($after.Count -gt 0) { $after -join ', ' } else { 'automatic' }
-                            Write-Warn2 "DNS $($fam[0]): was not applied (now: $got)" 4
+                            Write-Fail "DNS $($fam[0])" "was not applied (now: $got)"
                         }
                     } else {
                         Write-Change "DNS $($fam[0])" $from $to
@@ -1560,15 +2682,47 @@ function Invoke-Apply {
             if ($touch -and -not $v6On) { Write-Info 'DNS IPv6: IPv6 is disabled on this adapter, only IPv4 was needed.' 4 }
         }
 
-        # Restart the adapter only once, to apply everything
-        if ($changed -and $a.Status -eq 'Up') {
-            if ($PSCmdlet.ShouldProcess($a.Name, 'Restart the adapter to apply')) {
-                Write-Info 'Restarting the adapter (the connection drops for a few seconds)...' 4
-                Restart-NetAdapter -Name $a.Name -Confirm:$false -ErrorAction SilentlyContinue
+        if ($changed) { $toRestart.Add($a) }
+    }
+
+    # 6) Nagle on Wi-Fi: Windows rebuilds the adapter key on every network change, wiping the values.
+    #    A SYSTEM task writes them again whenever a network connects.
+    if (-not $NoTcp -and $wifiGuids.Count -gt 0) {
+        $guids = @($wifiGuids)
+        $label = 'Nagle keeper (scheduled task)'
+        Write-Section 'Nagle on Wi-Fi' 'kept on every network change'
+        if (Test-NagleKeeperCovers $guids) {
+            Write-Info "${label}: already in place" 4
+        } elseif ($PSCmdlet.ShouldProcess("$($NagleTask.Path)$($NagleTask.Name)", 'Register the task (SYSTEM, runs when a network connects)')) {
+            $existed = [bool](Get-NetTuneTask $NagleTask)
+            $backup.NagleKeeper = [ordered]@{ Existed = $existed; Guids = $guids }
+            $err = $null
+            try { Register-NagleKeeper $guids } catch { $err = $_.Exception.Message }
+            if (Test-NagleKeeperCovers $guids) {
+                $from = if ($existed) { 'other adapters' } else { 'none' }
+                Write-Change $label $from 'rewrites Nagle on every network change'
+            } elseif ($err) {
+                Write-Fail $label "could not register it: $err"
+            } else {
+                Write-Fail $label 'was not registered'
             }
-        } elseif ($changed) {
-            Write-Info 'Adapter disconnected: the changes apply when you connect it.' 4
+        } else {
+            Write-Change $label 'none' 'rewrites Nagle on every network change'
         }
+    }
+
+    # 7) MTU found by the test
+    if ($mtuRes -and $mtuRes.Mtu) { Set-ActiveMtu $mtuRes $backup }
+
+    # 8) Adapters restart once, all together, to apply RSC / RSS / checksum / LSO / driver options.
+    $up = @($toRestart | Where-Object { [string]$_.Status -eq 'Up' })
+    foreach ($a in @($toRestart | Where-Object { [string]$_.Status -ne 'Up' })) {
+        Write-Info "$($a.Name): disconnected, the changes apply when you connect it." 2
+    }
+    if ($up.Count -gt 0 -and $PSCmdlet.ShouldProcess((@($up | ForEach-Object { $_.Name }) -join ', '), 'Restart the adapter(s) to apply')) {
+        Write-Host ''
+        Write-Info "Restarting $($up.Count) adapter(s) once to apply the changes (the connection drops for a few seconds)..."
+        foreach ($a in $up) { Restart-NetAdapter -Name $a.Name -Confirm:$false -ErrorAction SilentlyContinue }
     }
 
     } finally {
@@ -1585,6 +2739,10 @@ function Invoke-Apply {
         if ($n -gt 0) { $lines += ,@($G.Sim, 'Cyan', "$n change(s) would be applied") }
         else          { $lines += ,@($G.Ok, 'Green', 'Nothing to change: everything is already optimized') }
         $lines += ,@($G.Info, 'DarkGray', 'Nothing was changed (-WhatIf).')
+        $lines += ,@($G.Info, 'DarkGray', 'At the end of a real Apply that needs a restart, "Restart now? (y/N)":')
+        $lines += ,@(' ', 'Gray', 'y saves the "before" test to logs\pending-after-restart.json,')
+        $lines += ,@(' ', 'Gray', "schedules a one-time test at your next logon ($($AfterTask.Path)$($AfterTask.Name))")
+        $lines += ,@(' ', 'Gray', 'and restarts. Nothing is scheduled with -WhatIf.')
         $lines += ,@($G.Arrow, 'Cyan', 'To apply: .\NetTune.ps1 -Mode Apply')
         Write-Box 'Simulation' $lines 'DarkYellow'
         return
@@ -1614,13 +2772,45 @@ function Invoke-Apply {
     else          { $lines += ,@($G.Ok, 'Green', 'Nothing to change: everything was already optimized') }
     if ($file)    { $lines += ,@($G.Info, 'DarkGray', "Backup: backups\$(Split-Path $file -Leaf)") }
     $lines += ,@($G.Arrow, 'Cyan', 'To undo: .\NetTune.ps1 -Mode Revert')
-    if ($script:RebootNeeded) {
+    if ($script:RegChanged) {
+        $lines += ,@($G.Warn, 'Yellow', 'RESTART THE PC: the registry values (Nagle, MMCSS, Tcpip,')
+        $lines += ,@(' ', 'Gray', 'ServiceProvider) only take effect after a restart, and the')
+        $lines += ,@(' ', 'Gray', '"after" test does not include them yet.')
+        $lines += ,@($G.Arrow, 'Cyan', 'Restart and run -Mode Test to see the full effect.')
+    } elseif ($script:RebootNeeded) {
         $lines += ,@($G.Warn, 'Yellow', 'RESTART THE PC for the power management change to take effect.')
         $lines += ,@(' ', 'Gray', 'The "after" test does not include that change yet.')
     }
     $lines += ,@($G.Info, 'DarkGray', 'Driver updates can restore the factory values.')
     $lines += ,@(' ', 'Gray', 'If the spikes come back, run Apply again.')
     Write-Box 'Done' $lines 'DarkGreen'
+
+    if ($script:RebootNeeded) {
+        Write-Host ''
+        if (Read-RestartAnswer) {
+            # Continue by itself after the restart: save the "before" test and schedule a one-time run.
+            $saved = $false
+            try {
+                Save-PendingState $before $file
+                $saved = $true
+            } catch {
+                Write-Warn2 "Could not save logs\pending-after-restart.json: $($_.Exception.Message)"
+            }
+            if ($saved) {
+                $err = $null
+                try { Register-AfterRestartTask } catch { $err = $_.Exception.Message }
+                if (Get-NetTuneTask $AfterTask) {
+                    Write-Ok 'After the restart, when you log in, NetTune opens by itself and runs the test (once).'
+                    if (-not $before) { Write-Info 'Apply ran with -SkipTest, so there will be no before / after table.' 4 }
+                } else {
+                    Write-Warn2 "Could not schedule the test after the restart$(if ($err) { ": $err" } else { '' })."
+                    Write-Info 'After restarting, run .\NetTune.ps1 -Mode Test yourself to see the full effect.' 4
+                    Remove-Item -Path $PendingFile -Force -ErrorAction SilentlyContinue
+                }
+            }
+            $script:RestartNow = $true
+        }
+    }
 }
 
 # ---------------------------------------------------------------- revert
@@ -1644,9 +2834,8 @@ function Invoke-Revert {
     Write-Info "File: $(Split-Path $file -Leaf)  $($G.Dot)  created: $created  $($G.Dot)  $tool"
 
     # Old backups (1.0.0) do not have this property; with StrictMode it has to be checked like this.
-    $planProp = $data.PSObject.Properties['WifiPowerPlan']
-    if ($planProp -and $planProp.Value) {
-        $p = $planProp.Value
+    $p = Get-BackupProp $data 'WifiPowerPlan'
+    if ($p) {
         Write-Host ''
         Write-Seg "  $($G.Node) " Cyan
         Write-Host 'Windows power plan' -ForegroundColor White
@@ -1659,6 +2848,71 @@ function Invoke-Revert {
         }
     }
 
+    # TCP globals and offloads (1.7.0+), in the same order they were applied.
+    $tg = @(Get-BackupProp $data 'TcpGlobal' | Where-Object { $_ })
+    $og = @(Get-BackupProp $data 'OffloadGlobal' | Where-Object { $_ })
+    if ($tg.Count + $og.Count -gt 0) {
+        Write-Section 'TCP (global)'
+        foreach ($e in $tg) {
+            $t = $TcpGlobalTweaks | Where-Object { $_.Name -eq $e.Name } | Select-Object -First 1
+            if ($t) { Restore-GlobalTweak 'tcp' $t $e.Old }
+        }
+        foreach ($e in $og) {
+            $t = $OffloadGlobalTweaks | Where-Object { $_.Name -eq $e.Name } | Select-Object -First 1
+            if ($t) { Restore-GlobalTweak 'offload' $t $e.Old }
+        }
+    }
+
+    # Registry (1.7.0+), newest first: a key created by Apply is deleted once its last value goes.
+    $reg = @(Get-BackupProp $data 'Registry' | Where-Object { $_ })
+    if ($reg.Count -gt 0) {
+        Write-Section 'Registry'
+        for ($i = $reg.Count - 1; $i -ge 0; $i--) { Restore-RegValue $reg[$i] }
+    }
+
+    # Nagle keeper on Wi-Fi (1.7.0+): the task goes, and so do the values it wrote for networks
+    # joined after Apply (they are not in the backup, so they did not exist before).
+    $keeper = Get-BackupProp $data 'NagleKeeper'
+    if ($keeper) {
+        Write-Section 'Nagle on Wi-Fi'
+        if (-not $keeper.Existed -and $PSCmdlet.ShouldProcess("$($NagleTask.Path)$($NagleTask.Name)", 'Remove the scheduled task')) {
+            if (Remove-NetTuneTask $NagleTask) { Write-Change 'Nagle keeper (scheduled task)' 'on' 'removed' }
+            else { Write-Fail 'Nagle keeper (scheduled task)' 'could not be removed' }
+        }
+        $known = @($reg | ForEach-Object { "$($_.Path)|$($_.Name)" })
+        # Not "$g": PowerShell names ignore case, so $g would replace the $G symbol table.
+        foreach ($guid in @($keeper.Guids)) {
+            $ifKey = "$TcpipKey\Interfaces\$guid"
+            if (-not (Test-Path -LiteralPath $ifKey)) { continue }
+            $paths = @($ifKey) + @(Get-ChildItem -LiteralPath $ifKey -ErrorAction SilentlyContinue | ForEach-Object { "$ifKey\$($_.PSChildName)" })
+            foreach ($p in $paths) {
+                foreach ($t in $NagleTweaks) {
+                    if ($known -contains "$p|$($t.Name)") { continue }
+                    if (-not (Get-RegState $p $t.Name).Exists) { continue }
+                    $net = if ($p -eq $ifKey) { '' } else { " (network $(ConvertFrom-NetworkKeyName (Split-Path $p -Leaf)))" }
+                    if ($PSCmdlet.ShouldProcess($p, "Delete $($t.Name)")) {
+                        try {
+                            Remove-ItemProperty -LiteralPath $p -Name $t.Name -ErrorAction Stop
+                            Write-Change "$($t.Name)$net" 'set by the keeper' 'not set (deleted)' 'restart the PC'
+                            $script:RebootNeeded = $true
+                        } catch { Write-Fail "$($t.Name)$net" $_.Exception.Message }
+                    }
+                }
+            }
+        }
+    }
+
+    # A pending test after the restart makes no sense once the tweaks are undone.
+    if ((Get-NetTuneTask $AfterTask) -or (Test-Path $PendingFile)) {
+        Write-Section 'Test after the restart'
+        if ($PSCmdlet.ShouldProcess('after-restart test', 'Remove the scheduled task and the state file')) {
+            if (Test-Path $PendingFile) { Remove-Item -Path $PendingFile -Force -ErrorAction SilentlyContinue }
+            if (Remove-NetTuneTask $AfterTask) { Write-Change 'Pending test after the restart' 'scheduled' 'removed' }
+            else { Write-Fail 'Pending test after the restart' 'the scheduled task could not be removed' }
+        }
+    }
+
+    $toRestart = New-Object 'System.Collections.Generic.List[object]'
     foreach ($e in @($data.Adapters)) {
         $a = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { [string]$_.InterfaceGuid -eq $e.InterfaceGuid } | Select-Object -First 1
         if (-not $a) { $a = Get-NetAdapter -Name $e.Name -ErrorAction SilentlyContinue }
@@ -1667,7 +2921,7 @@ function Invoke-Revert {
         Write-AdapterHeader $a
         $changed = $false
 
-        foreach ($adv in @($e.Advanced)) {
+        foreach ($adv in @(Get-BackupProp $e 'Advanced')) {
             if (-not $adv) { continue }
             if ($PSCmdlet.ShouldProcess($a.Name, "$($adv.DisplayName) -> '$($adv.DisplayValue)'")) {
                 try {
@@ -1680,22 +2934,57 @@ function Invoke-Revert {
             }
         }
 
-        if ($e.Rsc) {
-            if ($PSCmdlet.ShouldProcess($a.Name, 'Restore RSC')) {
-                try {
-                    if ($e.Rsc.IPv4) { Enable-NetAdapterRsc -Name $a.Name -IPv4 -NoRestart -ErrorAction Stop }
-                    if ($e.Rsc.IPv6) { Enable-NetAdapterRsc -Name $a.Name -IPv6 -NoRestart -ErrorAction Stop }
-                    Write-Change 'RSC' 'off' 'on'
-                    $changed = $true
-                } catch { Write-Warn2 "RSC: $($_.Exception.Message)" 4 }
-            }
+        $rscB = Get-BackupProp $e 'Rsc'
+        if ($rscB -and $PSCmdlet.ShouldProcess($a.Name, 'Restore RSC')) {
+            try {
+                if ($rscB.IPv4) { Enable-NetAdapterRsc -Name $a.Name -IPv4 -NoRestart -ErrorAction Stop }
+                if ($rscB.IPv6) { Enable-NetAdapterRsc -Name $a.Name -IPv6 -NoRestart -ErrorAction Stop }
+                Write-Change 'RSC' 'off' 'on'
+                $changed = $true
+            } catch { Write-Warn2 "RSC: $($_.Exception.Message)" 4 }
+        }
+
+        $rssB = Get-BackupProp $e 'Rss'
+        if ($rssB -and $PSCmdlet.ShouldProcess($a.Name, 'Restore RSS (off)')) {
+            try {
+                Disable-NetAdapterRss -Name $a.Name -NoRestart -ErrorAction Stop
+                if ((Get-RssState $a.Name) -eq $false) { Write-Change 'RSS' 'on' 'off'; $changed = $true }
+                else { Write-Fail 'RSS' 'was not restored' }
+            } catch { Write-Warn2 "RSS: $($_.Exception.Message)" 4 }
+        }
+
+        $ckB = Get-BackupProp $e 'Checksum'
+        if ($ckB -and $PSCmdlet.ShouldProcess($a.Name, 'Restore checksum offload')) {
+            try {
+                $args2 = @{}
+                foreach ($k in $ChecksumProps.Keys) {
+                    $v = Get-BackupProp $ckB $k
+                    if ($v) { $args2[$k] = [string]$v }
+                }
+                Set-NetAdapterChecksumOffload -Name $a.Name @args2 -NoRestart -ErrorAction Stop
+                Write-Change 'Checksum offload' 'on' 'as before'
+                $changed = $true
+            } catch { Write-Warn2 "Checksum offload: $($_.Exception.Message)" 4 }
+        }
+
+        $lsoB = Get-BackupProp $e 'Lso'
+        if ($lsoB -and $PSCmdlet.ShouldProcess($a.Name, 'Restore LSO')) {
+            try {
+                $args2 = @{}
+                if ($lsoB.V1IPv4) { $args2['V1IPv4'] = $true }
+                if ($lsoB.IPv4)   { $args2['IPv4'] = $true }
+                if ($lsoB.IPv6)   { $args2['IPv6'] = $true }
+                Enable-NetAdapterLso -Name $a.Name @args2 -NoRestart -ErrorAction Stop
+                $now = Get-LsoState $a.Name
+                if ($now -and (Test-LsoOn $now)) { Write-Change 'LSO' 'off' 'on'; $changed = $true }
+                else { Write-Fail 'LSO' 'was not restored' }
+            } catch { Write-Warn2 "LSO: $($_.Exception.Message)" 4 }
         }
 
         # Power management: PnPCapabilities. Old backups (PowerManagement) are ignored on purpose:
         # that version never managed to change anything (Set-NetAdapterPowerManagement has no such parameter).
-        $pnpProp = $e.PSObject.Properties['PnPCapabilities']
-        if ($pnpProp -and $pnpProp.Value) {
-            $pc = $pnpProp.Value
+        $pc = Get-BackupProp $e 'PnPCapabilities'
+        if ($pc) {
             $classKey = Get-AdapterClassKey ([string]$a.InterfaceGuid)
             if (-not $classKey) {
                 Write-Warn2 "Power management: could not find the adapter's registry key (it was $($pc.ClassKey))" 4
@@ -1716,10 +3005,11 @@ function Invoke-Revert {
             }
         }
 
-        if ($e.Dns) {
+        $dnsB = Get-BackupProp $e 'Dns'
+        if ($dnsB) {
             # Each family goes back to what it was: the old static list, or automatic (DHCP) if there was none.
-            $old4 = @(([string]$e.Dns.IPv4) -split '[,\s]+' | Where-Object { $_ })
-            $old6 = @(([string]$e.Dns.IPv6) -split '[,\s]+' | Where-Object { $_ })
+            $old4 = @(([string]$dnsB.IPv4) -split '[,\s]+' | Where-Object { $_ })
+            $old6 = @(([string]$dnsB.IPv6) -split '[,\s]+' | Where-Object { $_ })
             foreach ($fam in @(@('IPv4', $old4), @('IPv6', $old6))) {
                 $to = if (@($fam[1]).Count -gt 0) { @($fam[1]) -join ', ' } else { 'automatic (DHCP)' }
                 if ($PSCmdlet.ShouldProcess($a.Name, "DNS $($fam[0]) -> $to")) {
@@ -1735,10 +3025,40 @@ function Invoke-Revert {
             }
         }
 
-        if ($changed -and $a.Status -eq 'Up' -and $PSCmdlet.ShouldProcess($a.Name, 'Restart the adapter')) {
-            Write-Info 'Restarting the adapter (the connection drops for a few seconds)...' 4
-            Restart-NetAdapter -Name $a.Name -Confirm:$false -ErrorAction SilentlyContinue
+        if ($changed) { $toRestart.Add($a) }
+    }
+
+    # MTU (1.7.0+)
+    $mtuB = Get-BackupProp $data 'Mtu'
+    if ($mtuB) {
+        $a = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { [string]$_.InterfaceGuid -eq $mtuB.InterfaceGuid } | Select-Object -First 1
+        if (-not $a) { $a = Get-NetAdapter -Name $mtuB.Alias -ErrorAction SilentlyContinue }
+        if (-not $a) {
+            Write-Host ''
+            Write-Warn2 "MTU: adapter '$($mtuB.Alias)' not found, skipping."
+        } else {
+            Write-Section "MTU ($($a.Name))"
+            foreach ($fam in @('IPv4', 'IPv6')) {
+                $old = Get-BackupProp $mtuB $fam
+                if ($null -eq $old) { continue }
+                $now = Get-InterfaceMtu $a.ifIndex $fam
+                if ($now -eq [int]$old) { Write-Info "MTU ${fam}: already $old" 4; continue }
+                if ($PSCmdlet.ShouldProcess($a.Name, "MTU $fam -> $old")) {
+                    [void](Set-InterfaceMtu $a.Name $fam ([int]$old) 'persistent')
+                    $after = Get-InterfaceMtu $a.ifIndex $fam
+                    if ($after -eq [int]$old) { Write-Change "MTU $fam" ([string]$now) ([string]$old) }
+                    else { Write-Fail "MTU $fam" "was not restored (now: $after)" }
+                }
+            }
         }
+    }
+
+    # Adapters restart once, all together.
+    $up = @($toRestart | Where-Object { [string]$_.Status -eq 'Up' })
+    if ($up.Count -gt 0 -and $PSCmdlet.ShouldProcess((@($up | ForEach-Object { $_.Name }) -join ', '), 'Restart the adapter(s)')) {
+        Write-Host ''
+        Write-Info "Restarting $($up.Count) adapter(s) once (the connection drops for a few seconds)..."
+        foreach ($a in $up) { Restart-NetAdapter -Name $a.Name -Confirm:$false -ErrorAction SilentlyContinue }
     }
 
     Clear-DnsClientCache -ErrorAction SilentlyContinue
@@ -1759,7 +3079,7 @@ function Invoke-Revert {
         $lines += ,@($G.Info, 'DarkGray', 'This backup had nothing to restore.')
     }
     if ($script:RebootNeeded -and -not $WhatIfPreference) {
-        $lines += ,@($G.Warn, 'Yellow', 'RESTART THE PC for power management to go back to the original.')
+        $lines += ,@($G.Warn, 'Yellow', 'RESTART THE PC for everything to go back to the original.')
     }
     Write-Box 'Backup restored' $lines 'DarkMagenta'
 }
@@ -1774,32 +3094,50 @@ $clock = [Diagnostics.Stopwatch]::StartNew()
 try {
     Write-Banner
     if ($script:ArgError) { throw $script:ArgError }
+    if ($AfterRestart -and $Mode -ne 'Test') { throw '-AfterRestart only works with -Mode Test.' }
+    # A test after a restart that never happened (older than 24 h) is removed without running it.
+    if (-not $AfterRestart) { Clear-StalePending }
     switch ($Mode) {
         'Test' {
-            $pending = Show-AdapterState
-            [void](Invoke-NetTest 'Connection test')
-            $dnsChoice = $null
-            $dnsV6Fix  = $null
-            if ($Dns -ne 'Keep') {
-                $bench = Invoke-DnsBenchmark
-                $dnsChoice = $bench.Choice
-                $dnsV6Fix  = $bench.V6Fix
-                if ($dnsChoice -or $dnsV6Fix) { $pending++ }
+            # Started by the one-time task after the restart: compare with the saved "before".
+            $handled = $false
+            if ($AfterRestart) { $handled = Invoke-AfterRestart }
+            if (-not $handled) {
+                $pending = Show-AdapterState
+                [void](Invoke-NetTest 'Connection test')
+                $dnsChoice = $null
+                $dnsV6Fix  = $null
+                if ($Dns -ne 'Keep') {
+                    $bench = Invoke-DnsBenchmark
+                    $dnsChoice = $bench.Choice
+                    $dnsV6Fix  = $bench.V6Fix
+                    if ($dnsChoice -or $dnsV6Fix) { $pending++ }
+                }
+                # MTU: Test mode only shows the result (it never raises the MTU, not even for a moment).
+                $mtuRes = $null
+                if (-not $NoMtu) {
+                    $mtuRes = Invoke-MtuTest $null $false
+                    if ($mtuRes -and $mtuRes.Mtu -and $mtuRes.Mtu -ne $mtuRes.Cur4) { $pending++ }
+                }
+                $lines = @()
+                if ($dnsChoice) {
+                    $lines += ,@($G.Star, 'Green', "Best DNS: $dnsChoice (Apply sets it, IPv4 and IPv6)")
+                } elseif ($dnsV6Fix) {
+                    $lines += ,@($G.Star, 'Green', "DNS: IPv4 already $dnsV6Fix, Apply sets the IPv6 too")
+                }
+                if ($mtuRes -and $mtuRes.Mtu) {
+                    if ($mtuRes.Mtu -ne $mtuRes.Cur4) { $lines += ,@($G.Star, 'Green', "MTU: $($mtuRes.Mtu) on this network (now $($mtuRes.Cur4), Apply sets it)") }
+                    else { $lines += ,@($G.Ok, 'Green', "MTU $($mtuRes.Mtu) is already right for this network") }
+                }
+                if ($pending -gt 0) {
+                    $lines += ,@($G.Warn, 'Yellow', "$pending tweak(s) to do (marked with $($G.Warn) above)")
+                    $lines += ,@($G.Arrow, 'Cyan', 'Dry run: .\NetTune.ps1 -Mode Apply -WhatIf')
+                    $lines += ,@($G.Arrow, 'Cyan', 'Apply:   .\NetTune.ps1 -Mode Apply   (as admin)')
+                } else {
+                    $lines += ,@($G.Ok, 'Green', 'The adapters are already optimized. Nothing to do.')
+                }
+                Write-Box 'Summary' $lines
             }
-            $lines = @()
-            if ($dnsChoice) {
-                $lines += ,@($G.Star, 'Green', "Best DNS: $dnsChoice (Apply sets it, IPv4 and IPv6)")
-            } elseif ($dnsV6Fix) {
-                $lines += ,@($G.Star, 'Green', "DNS: IPv4 already $dnsV6Fix, Apply sets the IPv6 too")
-            }
-            if ($pending -gt 0) {
-                $lines += ,@($G.Warn, 'Yellow', "$pending tweak(s) to do (marked with $($G.Warn) above)")
-                $lines += ,@($G.Arrow, 'Cyan', 'Dry run: .\NetTune.ps1 -Mode Apply -WhatIf')
-                $lines += ,@($G.Arrow, 'Cyan', 'Apply:   .\NetTune.ps1 -Mode Apply   (as admin)')
-            } else {
-                $lines += ,@($G.Ok, 'Green', 'The adapters are already optimized. Nothing to do.')
-            }
-            Write-Box 'Summary' $lines
         }
         'Apply'  { Invoke-Apply }
         'Revert' { Invoke-Revert }
@@ -1813,11 +3151,16 @@ try {
     $el = $clock.Elapsed
     $took = if ($el.TotalMinutes -ge 1) { '{0}m {1:00}s' -f [int][math]::Floor($el.TotalMinutes), $el.Seconds } else { '{0}s' -f [int]$el.TotalSeconds }
     if ($transcript) {
-        try { Stop-Transcript -WhatIf:$false | Out-Null } catch { }
+        try { Stop-Transcript | Out-Null } catch { }   # Stop-Transcript has no -WhatIf
     }
     Write-Host ''
     Write-Seg "  Finished in $took" DarkGray
     if ($transcript) { Write-Seg "  $($G.Dot)  log: logs\$(Split-Path $transcript -Leaf)" DarkGray }
     Write-Host ''
     Write-Host ''
+    # Only after the log is closed, so it is complete.
+    if ($script:RestartNow) {
+        Write-Host '  Restarting the PC...' -ForegroundColor Yellow
+        try { Restart-Computer -Force -ErrorAction Stop } catch { Write-Host "  Could not restart: $($_.Exception.Message)" -ForegroundColor Red }
+    }
 }
