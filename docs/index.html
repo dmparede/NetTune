@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NetTune · Stable ping, no placebo</title>
+<meta name="description" content="NetTune is a free PowerShell script for Windows 10/11 that measures your connection, applies only the network tweaks that actually lower latency, and measures again to prove it. Backup and one-command revert included.">
+<meta name="theme-color" content="#0a0506">
+<meta property="og:title" content="NetTune · Stable ping, no placebo">
+<meta property="og:description" content="Measure. Fix. Prove it. A free, open-source PowerShell script that kills Wi-Fi lag spikes on Windows.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dmparede.github.io/NetTune/">
+<meta property="og:image" content="https://dmparede.github.io/NetTune/nettune-test.png">
+<link rel="canonical" href="https://dmparede.github.io/NetTune/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230a0506'/%3E%3Crect x='7' y='16' width='4' height='9' rx='1' fill='%23f6eeee' opacity='.45'/%3E%3Crect x='14' y='11' width='4' height='14' rx='1' fill='%23f6eeee' opacity='.7'/%3E%3Crect x='21' y='6' width='4' height='19' rx='1' fill='%23ff3b41'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600&family=Instrument+Serif:ital@1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+html,body{background:#0a0506;color:#f6eeee}
+:root{
+  --bg:#0a0506;--bg2:#120809;--fg:#f6eeee;
+  --fg80:rgba(246,238,238,.8);--fg60:rgba(246,238,238,.62);--fg40:rgba(246,238,238,.42);--fg20:rgba(246,238,238,.2);
+  --line:rgba(246,238,238,.1);--red:#ff3b41;--red-deep:#7a1d22;
+  --ease:cubic-bezier(.22,1,.36,1);--ease2:cubic-bezier(.4,0,.2,1);
+  --gut:clamp(20px,4.5vw,64px);--max:1240px;
+  --sans:'Inter Tight',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
+  --serif:'Instrument Serif',Georgia,serif;
+  --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{overflow-x:clip;scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{margin:0;font:400 16px/1.55 var(--sans);letter-spacing:-.01em;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;overflow-x:clip}
+::selection{background:rgba(255,59,65,.32);color:#fff}
+a{color:inherit;text-decoration:none}
+img{display:block;max-width:100%;height:auto}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+:focus-visible{outline:2px solid var(--red);outline-offset:3px;border-radius:6px}
+em.s{font-family:var(--serif);font-style:italic;font-weight:400;color:var(--fg60);letter-spacing:-.015em}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 var(--gut)}
+.lbl{font:500 11px/1.2 var(--mono);text-transform:uppercase;letter-spacing:.2em;color:var(--fg40)}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--red);box-shadow:0 0 10px rgba(255,59,65,.8);vertical-align:middle;margin-right:10px;transform:translateY(-1px)}
+.glass{background:rgba(22,11,12,.55);-webkit-backdrop-filter:blur(14px) saturate(140%);backdrop-filter:blur(14px) saturate(140%);box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 0 0 1px rgba(255,255,255,.075)}
+.grain{position:fixed;inset:0;z-index:100;pointer-events:none;opacity:.06;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:14px;height:52px;padding:0 8px 0 24px;border-radius:999px;background:var(--fg);color:#0a0506;font:500 15px/1 var(--sans);letter-spacing:-.01em;transition:transform .25s var(--ease2),background .25s var(--ease2)}
+.btn:hover{background:#fff}.btn:active{transform:scale(.97)}
+.btn .chip{width:36px;height:36px;border-radius:50%;background:var(--red);display:grid;place-items:center;color:#fff;transition:transform .3s var(--ease)}
+.btn:hover .chip{transform:translateY(2px)}
+.btn.sm{height:38px;padding:0 16px;font-size:14px}
+.link{position:relative;display:inline-flex;align-items:center;gap:8px;color:var(--fg80);font:500 15px/1 var(--sans);padding:6px 0;transition:color .25s}
+.link::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:currentColor;transform:scaleX(0);transform-origin:left;transition:transform .35s var(--ease)}
+.link:hover{color:var(--fg)}.link:hover::after{transform:scaleX(1)}
+
+/* nav */
+.nav{position:fixed;top:16px;left:0;right:0;z-index:20;pointer-events:none}
+.nav .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.nav .wrap>*{pointer-events:auto}
+.brand{display:flex;align-items:center;gap:10px;font:600 17px/1 var(--sans);letter-spacing:-.025em}
+.brand svg{width:26px;height:26px}
+.links{display:flex;gap:2px;padding:5px;border-radius:999px}
+.links a{font-size:14px;color:var(--fg80);padding:9px 16px;border-radius:999px;transition:background .25s,color .25s}
+.links a:hover{background:rgba(255,255,255,.07);color:var(--fg)}
+.nav-r{display:flex;align-items:center;gap:8px}
+.icon-btn{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;transition:background .25s}
+.icon-btn:hover{background:rgba(255,255,255,.08)}
+.burger{display:none}
+.menu{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;justify-content:center;padding:var(--gut);background:rgba(10,5,6,.92);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);opacity:0;visibility:hidden;transition:opacity .35s var(--ease2),visibility .35s}
+.menu.open{opacity:1;visibility:visible}
+.menu a{font:500 36px/1.25 var(--sans);letter-spacing:-.035em;opacity:0;transform:translateY(16px);transition:opacity .45s var(--ease),transform .45s var(--ease)}
+.menu.open a{opacity:1;transform:none}
+.menu a:nth-child(2){transition-delay:.05s}.menu a:nth-child(3){transition-delay:.1s}.menu a:nth-child(4){transition-delay:.15s}.menu a:nth-child(5){transition-delay:.2s}
+.menu .close{position:absolute;top:24px;right:var(--gut)}
+
+/* hero */
+.hero{position:relative;min-height:640px;height:100vh;height:100svh;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
+.trace{position:absolute;inset:0;width:100%;height:100%;z-index:0;opacity:0;transition:opacity 1.2s var(--ease2)}
+.trace.on{opacity:1}
+.hero::after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;background:linear-gradient(to top,var(--bg) 0%,rgba(10,5,6,.86) 22%,rgba(10,5,6,0) 52%),linear-gradient(to bottom,var(--bg) 0%,rgba(10,5,6,0) 16%),linear-gradient(to right,var(--bg) 0%,rgba(10,5,6,0) 12%)}
+.hero-in{position:relative;z-index:10;width:100%;padding-bottom:clamp(40px,8vh,96px)}
+.hero-grid{display:flex;align-items:flex-end;justify-content:space-between;gap:48px}
+.hero-copy{max-width:780px}
+.eyebrow{margin-bottom:26px;display:flex;align-items:center}
+h1{margin:0;font:500 clamp(50px,8.4vw,128px)/.92 var(--sans);letter-spacing:-.047em}
+h1 .ln{display:block;overflow:hidden;padding-bottom:.08em;margin-bottom:-.08em}
+h1 .ln>span{display:inline-block;white-space:nowrap}
+h1 em.s{letter-spacing:-.025em;padding-right:.04em}
+.sub{margin:28px 0 0;max-width:31rem;font-size:17px;line-height:1.55;color:var(--fg60)}
+.ctas{margin-top:36px;display:flex;align-items:center;gap:28px;flex-wrap:wrap}
+.meter{width:310px;flex:0 0 auto;border-radius:22px;padding:20px 20px 16px}
+.meter .top{display:flex;justify-content:space-between;align-items:center}
+.live{display:flex;align-items:center;gap:7px;font:500 10px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--fg40)}
+.live i{width:6px;height:6px;border-radius:50%;background:var(--red);animation:blink 1.6s steps(2,start) infinite}
+@keyframes blink{to{visibility:hidden}}
+.read{display:flex;align-items:baseline;gap:8px;margin:14px 0 4px;font:300 88px/.95 var(--sans);letter-spacing:-.045em;font-variant-numeric:tabular-nums}
+.read small{font:500 14px/1 var(--mono);letter-spacing:0;color:var(--fg40)}
+.read-note{font:400 12px/1.4 var(--sans);color:var(--fg40);min-height:17px}
+.term{margin-top:14px;padding-top:14px;border-top:1px solid var(--line);font:400 12px/1.5 var(--mono);color:var(--fg60);white-space:nowrap;overflow:hidden;min-height:33px}
+.term b{color:var(--red);font-weight:500}
+.caret{display:inline-block;width:7px;height:14px;background:var(--fg60);vertical-align:-2px;margin-left:2px;animation:blink 1s steps(2,start) infinite}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+.toggle-row span{font:500 13px/1 var(--sans);color:var(--fg80)}
+.sw{position:relative;width:54px;height:30px;border-radius:999px;background:rgba(255,255,255,.1);box-shadow:inset 0 0 0 1px rgba(255,255,255,.1);transition:background .35s var(--ease2)}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:var(--fg);transition:transform .45s cubic-bezier(.34,1.56,.64,1)}
+.sw[aria-pressed="true"]{background:var(--red)}
+.sw[aria-pressed="true"]::after{transform:translateX(24px)}
+.sw-lbl{font:500 10px/1 var(--mono);letter-spacing:.14em;color:var(--fg40);margin-right:10px}
+
+/* entrance */
+.js .rise{opacity:0;transform:translateY(24px)}
+.js h1 .ln>span{transform:translateY(110%)}
+.loaded .rise{opacity:1;transform:none;transition:opacity .9s var(--ease),transform .9s var(--ease);transition-delay:var(--d,0s)}
+.loaded h1 .ln>span{transform:none;transition:transform 1s var(--ease);transition-delay:var(--d,0s)}
+
+/* reveal */
+.js [data-r]{opacity:0;transform:translateY(28px)}
+.js [data-r].in{opacity:1;transform:none;transition:opacity .9s var(--ease),transform .9s var(--ease);transition-delay:calc(var(--i,0)*80ms)}
+
+/* stats */
+.stats{border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.stats .wrap{display:grid;grid-template-columns:repeat(4,1fr)}
+.stat{padding:30px 28px 30px 0}
+.stat+.stat{padding-left:28px;border-left:1px solid var(--line)}
+.stat b{display:block;font:400 40px/1 var(--sans);letter-spacing:-.035em;font-variant-numeric:tabular-nums}
+.stat b s{color:var(--fg40);text-decoration-color:var(--red);text-decoration-thickness:2px}
+.stat b sub{font:500 13px/1 var(--mono);letter-spacing:0;color:var(--fg40);vertical-align:baseline;margin-left:4px}
+.stat p{margin:10px 0 0;font-size:13.5px;line-height:1.45;color:var(--fg40);max-width:24ch}
+
+/* sections */
+section.sec{padding:clamp(96px,13vw,168px) 0}
+.sh{margin-bottom:clamp(48px,6vw,80px)}
+.sh .lbl{display:flex;align-items:center;gap:14px;margin-bottom:22px}
+.sh .lbl::after{content:"";width:56px;height:1px;background:var(--fg20)}
+h2{margin:0;font:500 clamp(38px,5.6vw,76px)/1 var(--sans);letter-spacing:-.04em;max-width:16ch}
+.sh p.lead{margin:22px 0 0;max-width:34rem;color:var(--fg60);font-size:17px}
+
+.manifesto{margin:0;max-width:30ch;font:400 clamp(24px,3vw,40px)/1.28 var(--sans);letter-spacing:-.022em}
+.manifesto .w{opacity:.14;transition:opacity .2s linear}
+.story-grid{display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:start}
+.story-grid h2 em.s{white-space:nowrap}
+.story-grid .sh{position:sticky;top:120px;margin:0}
+
+.tlist{display:grid;grid-template-columns:1fr 1fr;column-gap:72px}
+.trow{display:grid;grid-template-columns:44px 1fr;padding:26px 0;border-top:1px solid var(--line)}
+.trow .n{font:500 12px/1.9 var(--mono);color:var(--red)}
+.trow h3{margin:0;font:500 20px/1.3 var(--sans);letter-spacing:-.02em}
+.trow p{margin:8px 0 0;font-size:15px;color:var(--fg60);max-width:46ch}
+code{font:400 .88em var(--mono);color:var(--fg80);background:rgba(255,255,255,.06);padding:.1em .35em;border-radius:5px}
+
+.sheet{background:var(--bg2);border-radius:44px 44px 0 0;position:relative}
+.nope{border-top:1px solid var(--line)}
+.nrow{display:grid;grid-template-columns:5fr 7fr;gap:48px;padding:30px 0;border-bottom:1px solid var(--line);align-items:baseline}
+.nrow h3{margin:0;position:relative;display:inline-block;justify-self:start;font:500 clamp(22px,2.4vw,30px)/1.2 var(--sans);letter-spacing:-.025em;color:var(--fg60)}
+.nrow h3::after{content:"";position:absolute;left:-2%;right:-2%;top:55%;height:2px;background:var(--red);transform:scaleX(0);transform-origin:left;transition:transform .8s var(--ease) .35s}
+.nrow.in h3::after,.no-js .nrow h3::after{transform:scaleX(1)}
+.nrow p{margin:0;color:var(--fg60);font-size:16px;max-width:52ch}
+
+.steps{position:relative;display:grid;grid-template-columns:repeat(4,1fr);gap:40px;padding-top:44px}
+.track{position:absolute;top:0;left:0;right:0;height:1px;background:var(--line)}
+.track i{position:absolute;inset:0;background:var(--red);transform:scaleX(0);transform-origin:left;transition:transform 1.8s var(--ease)}
+.steps.in .track i{transform:scaleX(1)}
+.step::before{content:"";position:absolute;top:-4px;width:9px;height:9px;border-radius:50%;background:var(--bg);box-shadow:0 0 0 1px var(--fg40)}
+.step{position:relative}
+.step .n{font:500 12px/1 var(--mono);color:var(--fg40)}
+.step h3{margin:14px 0 10px;font:500 22px/1.2 var(--sans);letter-spacing:-.02em}
+.step p{margin:0;font-size:15px;color:var(--fg60)}
+
+.shots{display:grid;grid-template-columns:7fr 5fr;gap:24px;align-items:start}
+.frame{border-radius:18px;padding:10px;margin:0}
+.frame img{border-radius:10px;width:100%;background:#0c0c0c}
+.frame figcaption{padding:14px 6px 4px;font-size:14px;color:var(--fg60)}
+
+.usage{display:grid;grid-template-columns:4fr 7fr;gap:56px;align-items:start}
+.notes{display:grid;gap:22px}
+.note{padding-left:18px;border-left:1px solid var(--fg20);font-size:15px;color:var(--fg60)}
+.note b{display:block;color:var(--fg);font-weight:500;margin-bottom:4px;font-size:16px}
+.terminal{border-radius:20px;overflow:hidden}
+.tbar{display:flex;align-items:center;gap:8px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.tbar i{width:10px;height:10px;border-radius:50%;background:rgba(255,255,255,.14)}
+.tbar i:first-child{background:var(--red)}
+.tbar span{margin-left:10px;font:400 12px/1 var(--mono);color:var(--fg40)}
+.cmd{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:16px 18px;border-bottom:1px solid var(--line)}
+.cmd:last-child{border-bottom:0}
+.cmd .c{font:400 12px/1.4 var(--mono);color:var(--fg40)}
+.cmd pre{margin:6px 0 0;font:400 13px/1.5 var(--mono);color:var(--fg);white-space:pre-wrap;word-break:break-word}
+.cmd pre b{color:var(--red);font-weight:500}
+.copy{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:var(--fg60);box-shadow:inset 0 0 0 1px var(--line);transition:background .25s,color .25s}
+.copy:hover{background:rgba(255,255,255,.07);color:var(--fg)}
+.copy.ok{color:var(--red)}
+.more{margin-top:20px;font-size:14px;color:var(--fg40)}
+
+.band{padding:clamp(72px,9vw,120px) 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);overflow:hidden}
+.band .lbl{text-align:center;margin-bottom:34px}
+.mq{display:flex;width:max-content;animation:mq 42s linear infinite}
+.mq span{font:500 clamp(48px,8.6vw,128px)/1 var(--sans);letter-spacing:-.045em;color:transparent;-webkit-text-stroke:1px rgba(246,238,238,.3);white-space:nowrap;padding:0 .3em}
+.mq span.x{-webkit-text-stroke:0;color:var(--red);font-size:clamp(20px,3vw,40px);align-self:center;padding:0}
+@keyframes mq{to{transform:translateX(-50%)}}
+.band:hover .mq{animation-play-state:paused}
+
+.faq{border-top:1px solid var(--line);max-width:920px}
+.faq details{border-bottom:1px solid var(--line)}
+.faq summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;gap:24px;padding:26px 0;font:500 clamp(18px,1.8vw,22px)/1.3 var(--sans);letter-spacing:-.02em}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary i{flex:0 0 auto;width:28px;height:28px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--fg20);position:relative;transition:transform .35s var(--ease),background .25s}
+.faq summary i::before,.faq summary i::after{content:"";position:absolute;left:50%;top:50%;width:11px;height:1.5px;background:var(--fg);transform:translate(-50%,-50%)}
+.faq summary i::after{transform:translate(-50%,-50%) rotate(90deg)}
+.faq details[open] summary i{transform:rotate(45deg);background:var(--red)}
+.faq details p{margin:0 0 26px;max-width:62ch;color:var(--fg60)}
+
+.final{padding:clamp(120px,15vw,200px) 0 0;text-align:left}
+.final h2{font-size:clamp(56px,11vw,172px);line-height:.9;letter-spacing:-.055em;max-width:none}
+.final .ctas{margin-top:48px}
+footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
+.ghost{font:600 23vw/.8 var(--sans);letter-spacing:-.07em;color:transparent;background:linear-gradient(to bottom,rgba(246,238,238,.09),rgba(246,238,238,0) 85%);-webkit-background-clip:text;background-clip:text;white-space:nowrap;text-align:center;margin:0 0 -.1em;user-select:none}
+.foot{position:relative;background:var(--bg);display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;padding:26px 0 max(28px,env(safe-area-inset-bottom));border-top:1px solid var(--line);font-size:13px;color:var(--fg40)}
+.foot nav{display:flex;gap:22px}
+.foot a:hover{color:var(--fg)}
+
+/* responsive */
+@media (max-width:1023px){
+  .links{display:none}.burger{display:grid}
+  .nav .btn.sm{display:none}
+  .hero-grid{flex-direction:column-reverse;align-items:stretch;gap:28px}
+  .meter{width:100%;display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"top top top" "read term sw";align-items:end;column-gap:18px;padding:14px 16px}
+  .meter .top{grid-area:top}
+  .read{grid-area:read;font-size:46px;margin:8px 0 0}
+  .read-note{display:none}
+  .term{grid-area:term;border:0;margin:0;padding:0 0 6px;min-height:0;font-size:11px}
+  .toggle-row{grid-area:sw;margin:0 0 4px}.toggle-row>span{display:none}
+  .stats .wrap{grid-template-columns:1fr 1fr}
+  .stat:nth-child(3){padding-left:0;border-left:0}
+  .stat:nth-child(n+3){border-top:1px solid var(--line)}
+  .story-grid,.usage{grid-template-columns:1fr;gap:40px}
+  .story-grid .sh{position:static}
+  .tlist{grid-template-columns:1fr}
+  .steps{grid-template-columns:1fr 1fr;row-gap:48px}
+  .shots{grid-template-columns:1fr}
+  .nrow{grid-template-columns:1fr;gap:12px}
+}
+@media (max-width:639px){
+  .eyebrow{margin-bottom:18px}
+  .sub{font-size:16px;margin-top:20px}
+  .ctas{margin-top:26px;gap:20px}
+  h1 .ln>span{white-space:normal}
+  .term{display:none}
+  .meter{grid-template-areas:"top top" "read sw";grid-template-columns:1fr auto}
+  .stat{padding:22px 16px 22px 0}.stat+.stat{padding-left:16px}
+  .stat b{font-size:30px}
+  .steps{grid-template-columns:1fr;padding-top:0;padding-left:28px;gap:36px}
+  .track{top:0;bottom:0;left:0;right:auto;width:1px;height:auto}
+  .track i{transform:scaleY(0);transform-origin:top}
+  .steps.in .track i{transform:scaleY(1)}
+  .step::before{top:2px;left:-32px}
+  .sheet{border-radius:28px 28px 0 0}
+  .cmd pre{font-size:12px}
+}
+@media (max-height:720px) and (min-width:1024px){h1{font-size:clamp(48px,7vw,96px)}.sub{margin-top:20px}.ctas{margin-top:26px}.eyebrow{margin-bottom:18px}}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  .js .rise,.js [data-r]{opacity:1!important;transform:none!important}
+  .js h1 .ln>span{transform:none!important}
+  .manifesto .w{opacity:1!important}
+  .nrow h3::after,.track i{transform:none!important}
+}
+</style>
+<script>document.documentElement.classList.add('js')</script>
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand rise" style="--d:0s" href="#top" aria-label="NetTune home">
+      <svg viewBox="0 0 26 26" aria-hidden="true"><rect x="2" y="13" width="5" height="10" rx="1.5" fill="#f6eeee" opacity=".4"/><rect x="10.5" y="8" width="5" height="15" rx="1.5" fill="#f6eeee" opacity=".7"/><rect x="19" y="3" width="5" height="20" rx="1.5" fill="#ff3b41"/></svg>
+      NetTune
+    </a>
+    <nav class="links glass rise" style="--d:.05s" aria-label="Primary">
+      <a href="#story">Story</a><a href="#tweaks">Tweaks</a><a href="#usage">Usage</a><a href="#faq">FAQ</a>
+    </nav>
+    <div class="nav-r rise" style="--d:.1s">
+      <a class="icon-btn glass" href="https://github.com/dmparede/NetTune" aria-label="NetTune on GitHub"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.82 1.19 3.08 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
+      <a class="btn sm" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">Download</a>
+      <button class="icon-btn glass burger" id="burger" aria-label="Open menu" aria-expanded="false" aria-controls="menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 8h16M4 16h16"/></svg></button>
+    </div>
+  </div>
+</header>
+
+<nav class="menu" id="menu" aria-label="Menu">
+  <button class="icon-btn glass close" id="close" aria-label="Close menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  <a href="#story">Story</a><a href="#tweaks">Tweaks</a><a href="#usage">Usage</a><a href="#faq">FAQ</a>
+  <a href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1" style="color:var(--red)">Download ↓</a>
+</nav>
+
+<main id="top">
+<section class="hero" aria-label="NetTune">
+  <canvas class="trace" id="trace" aria-hidden="true"></canvas>
+  <div class="hero-in wrap">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow lbl rise" style="--d:.15s"><span class="dot"></span>v1.6.0 · Windows 10/11 · Free &amp; MIT</p>
+        <h1><span class="ln"><span style="--d:.25s">Stable ping.</span></span><span class="ln"><span style="--d:.37s">No <em class="s">placebo.</em></span></span></h1>
+        <p class="sub rise" style="--d:.55s">NetTune measures your connection, changes only the network settings that actually move latency, then measures again to prove it. One command undoes everything.</p>
+        <div class="ctas rise" style="--d:.7s">
+          <a class="btn" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">Download NetTune<span class="chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v14M6 12l6 6 6-6"/></svg></span></a>
+          <a class="link" href="https://github.com/dmparede/NetTune">Read the source <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+      <aside class="meter glass rise" style="--d:.85s" aria-label="Router ping simulation">
+        <div class="top"><span class="live"><i></i>Router ping</span><span class="lbl" style="font-size:10px">simulation</span></div>
+        <div class="read" aria-live="off"><span id="ms">--</span><small>ms</small></div>
+        <div class="read-note" id="note">Before NetTune: power saving + roaming scans</div>
+        <div class="term" id="term"><span id="tt"></span><span class="caret"></span></div>
+        <div class="toggle-row"><span>NetTune</span><div style="display:flex;align-items:center"><span class="sw-lbl" id="swl">OFF</span><button class="sw" id="sw" aria-pressed="false" aria-label="Toggle NetTune in the simulation"></button></div></div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<div class="stats" aria-label="Key numbers">
+  <div class="wrap">
+    <div class="stat" data-r style="--i:0"><b><s>144</s> → <span data-count="3">3</span><sub>ms</sub></b><p>Average router ping after Apply, on a Wi-Fi 7 laptop</p></div>
+    <div class="stat" data-r style="--i:1"><b><span data-count="9">9</span></b><p>Targets tested: router, DNS and the closest game servers</p></div>
+    <div class="stat" data-r style="--i:2"><b><span data-count="0">0</span></b><p>Placebo registry tweaks. Only what measurably helps</p></div>
+    <div class="stat" data-r style="--i:3"><b><span data-count="1">1</span></b><p>Command to undo everything, from an automatic backup</p></div>
+  </div>
+</div>
+
+<section class="sec" id="story">
+  <div class="wrap story-grid">
+    <div class="sh" data-r>
+      <p class="lbl">01 · Story</p>
+      <h2>700 ms spikes, <em class="s">mid-match.</em></h2>
+    </div>
+    <p class="manifesto" id="manifesto">It started with a Wi-Fi 7 laptop that froze in Fortnite. The internet was fine. The card's power saving and roaming scans were on by default, napping between packets and hunting for other routers mid-fight. NetTune turns that diagnosis into a tool: test, fix the few settings that matter, test again.</p>
+  </div>
+</section>
+
+<section class="sec" id="tweaks" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh" data-r>
+      <p class="lbl">02 · What it tweaks</p>
+      <h2>Eight settings. <em class="s">That's it.</em></h2>
+      <p class="lead">Applied to every physical adapter: Wi-Fi, Ethernet and USB. Option names are recognised in English, Portuguese and Spanish drivers.</p>
+    </div>
+    <div class="tlist">
+      <div class="trow" data-r style="--i:0"><span class="n">01</span><div><h3>Wi-Fi power plan</h3><p>"Wireless Adapter Settings" set to maximum performance, so gaming on battery stops causing spikes.</p></div></div>
+      <div class="trow" data-r style="--i:1"><span class="n">02</span><div><h3>No sleeping adapter</h3><p>"Allow the computer to turn off this device" off, via <code>PnPCapabilities = 24</code>. Takes effect after a restart.</p></div></div>
+      <div class="trow" data-r style="--i:0"><span class="n">03</span><div><h3>Adapter power saving off</h3><p>The card stops dozing between packets, which is what makes it slow to wake up mid-game.</p></div></div>
+      <div class="trow" data-r style="--i:1"><span class="n">04</span><div><h3>Roaming at lowest</h3><p>No more scanning for other access points during a match. Every scan freezes the connection.</p></div></div>
+      <div class="trow" data-r style="--i:0"><span class="n">05</span><div><h3>Green Ethernet &amp; EEE off</h3><p>Energy-Efficient Ethernet causes the same problem on a cable. USB selective suspend goes too.</p></div></div>
+      <div class="trow" data-r style="--i:1"><span class="n">06</span><div><h3>RSC off</h3><p>Receive Segment Coalescing merges packets to save CPU. Great for downloads, bad for latency.</p></div></div>
+      <div class="trow" data-r style="--i:0"><span class="n">07</span><div><h3>Fastest DNS, only if it wins</h3><p>Tests Cloudflare, Google, Quad9 and OpenDNS with uncached queries and switches only when one clearly wins.</p></div></div>
+      <div class="trow" data-r style="--i:1"><span class="n">08</span><div><h3>Backup &amp; revert</h3><p>Every original value is saved to JSON before anything changes. <code>-Mode Revert</code> puts it all back.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec sheet">
+  <div class="wrap">
+    <div class="sh" data-r>
+      <p class="lbl">03 · What it won't do</p>
+      <h2>No miracle <em class="s">tweaks.</em></h2>
+      <p class="lead">Most "gaming network optimizers" flip dozens of settings that do nothing for in-game ping. NetTune skips them on purpose.</p>
+    </div>
+    <div class="nope">
+      <div class="nrow" data-r><h3>TCP tweaks</h3><p>Nagle, <code>TcpAckFrequency</code>, <code>TCPNoDelay</code>. Games use UDP, so these change nothing during a match.</p></div>
+      <div class="nrow" data-r><h3>NetworkThrottlingIndex &amp; co.</h3><p>No evidence they improve ping, and some of them make other things worse.</p></div>
+      <div class="nrow" data-r><h3>"DNS lowers your ping"</h3><p>DNS only turns names into IPs before you connect. Faster logins and stores, yes. In-game ping, no.</p></div>
+      <div class="nrow" data-r><h3>Touching VPNs or Bluetooth</h3><p>Virtual adapters, VPNs and Bluetooth are ignored, so nothing else on your PC breaks.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="how">
+  <div class="wrap">
+    <div class="sh" data-r>
+      <p class="lbl">04 · How it works</p>
+      <h2>Measure. Fix. <em class="s">Prove it.</em></h2>
+    </div>
+    <div class="steps" id="steps">
+      <div class="track" aria-hidden="true"><i></i></div>
+      <div class="step" data-r style="--i:0"><span class="n">01</span><h3>Measure</h3><p>50 pings to your router, DNS and the closest Epic, Valve, Blizzard, Ubisoft, Xbox and Embark servers: average, jitter, spikes and loss.</p></div>
+      <div class="step" data-r style="--i:1"><span class="n">02</span><h3>Back up</h3><p>The current value of every option it may touch is saved, including your old DNS for IPv4 and IPv6.</p></div>
+      <div class="step" data-r style="--i:2"><span class="n">03</span><h3>Apply</h3><p>Only the eight settings, read back afterwards. A ✓ means it really changed.</p></div>
+      <div class="step" data-r style="--i:3"><span class="n">04</span><h3>Measure again</h3><p>Same servers, fair comparison: ▼ when it improved, ▲ when it got worse.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh" data-r>
+      <p class="lbl">05 · The real thing</p>
+      <h2>Straight from the <em class="s">console.</em></h2>
+    </div>
+    <div class="shots">
+      <figure class="frame glass" data-r style="--i:0"><img src="nettune-test.png" alt="NetTune connection test table: ping, jitter, spikes and loss to the router, DNS servers and game servers" loading="lazy" width="908" height="362"><figcaption>Connection test on an already-tuned PC: 0.5 ms to the router, 0% loss everywhere.</figcaption></figure>
+      <figure class="frame glass" data-r style="--i:1"><img src="nettune-dns.png" alt="NetTune DNS test comparing Cloudflare, Google, Quad9 and OpenDNS response times" loading="lazy" width="810" height="290"><figcaption>DNS test: Cloudflare is already the fastest here, so NetTune leaves it alone.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="usage" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh" data-r>
+      <p class="lbl">06 · Usage</p>
+      <h2>One script. Four <em class="s">commands.</em></h2>
+    </div>
+    <div class="usage">
+      <div class="notes">
+        <p class="note" data-r style="--i:0"><b>Blue PowerShell, as admin</b>Open Windows PowerShell 5.1 as administrator in the folder where you saved <code>NetTune.ps1</code>.</p>
+        <p class="note" data-r style="--i:1"><b>Restart after Apply</b>"Allow the computer to turn off this device" only changes after a reboot. NetTune tells you at the end.</p>
+        <p class="note" data-r style="--i:2"><b>Expect a short drop</b>The connection goes away for a few seconds while the adapters restart.</p>
+      </div>
+      <div data-r style="--i:1">
+        <div class="terminal glass">
+          <div class="tbar"><i></i><i></i><i></i><span>Windows PowerShell · Administrator</span></div>
+          <div class="cmd"><div><div class="c"># 1 · Measure only. Changes nothing, no admin needed</div><pre><b>PS&gt;</b> powershell -ExecutionPolicy Bypass -File .\NetTune.ps1</pre></div><button class="copy" data-copy="powershell -ExecutionPolicy Bypass -File .\NetTune.ps1" aria-label="Copy command 1"></button></div>
+          <div class="cmd"><div><div class="c"># 2 · Dry run. Shows what would change</div><pre><b>PS&gt;</b> powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -WhatIf</pre></div><button class="copy" data-copy="powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -WhatIf" aria-label="Copy command 2"></button></div>
+          <div class="cmd"><div><div class="c"># 3 · Apply. Measure, back up, apply, measure again</div><pre><b>PS&gt;</b> powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply</pre></div><button class="copy" data-copy="powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply" aria-label="Copy command 3"></button></div>
+          <div class="cmd"><div><div class="c"># 4 · Undo everything, from the latest backup</div><pre><b>PS&gt;</b> powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Revert</pre></div><button class="copy" data-copy="powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Revert" aria-label="Copy command 4"></button></div>
+        </div>
+        <p class="more">More: <code>-Dns Keep</code> <code>-Services Epic,Valve</code> <code>-ExtraTargets 1.2.3.4</code> <code>-Count 100</code> · Full help: <code>Get-Help .\NetTune.ps1 -Full</code></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="band" aria-label="Game services tested">
+  <p class="lbl">Tested against the closest region of</p>
+  <div class="mq" aria-hidden="true" id="mq">
+    <span>Epic Games</span><span class="x">✦</span><span>Valve</span><span class="x">✦</span><span>Blizzard</span><span class="x">✦</span><span>Ubisoft</span><span class="x">✦</span><span>Xbox</span><span class="x">✦</span><span>Embark</span><span class="x">✦</span><span>Your server</span><span class="x">✦</span>
+  </div>
+  <p class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Epic Games, Valve, Blizzard, Ubisoft, Microsoft Xbox, Embark, and your own server with -ExtraTargets.</p>
+</div>
+
+<section class="sec" id="faq">
+  <div class="wrap">
+    <div class="sh" data-r>
+      <p class="lbl">07 · FAQ</p>
+      <h2>Questions, <em class="s">answered.</em></h2>
+    </div>
+    <div class="faq" data-r>
+      <details><summary>Is it safe to run?<i aria-hidden="true"></i></summary><p>Yes. Run the measure-only mode or <code>-WhatIf</code> first to see exactly what would change. Apply saves a backup of every original value before touching anything, and <code>-Mode Revert</code> restores it.</p></details>
+      <details><summary>Will it lower my ping to the game server?<i aria-hidden="true"></i></summary><p>It removes the spikes and lag that come from your own PC and Wi-Fi. It can't shorten the distance to the server or fix your ISP. The golden rule: if the ping to your router is high or spiky, the problem is local, and that's exactly what NetTune fixes.</p></details>
+      <details><summary>Why didn't the "after" test show the power-management change?<i aria-hidden="true"></i></summary><p>"Allow the computer to turn off this device" only takes effect after a restart, so the after test can't include it yet. Restart the PC after Apply.</p></details>
+      <details><summary>The spikes came back after a driver update. Why?<i aria-hidden="true"></i></summary><p>Driver updates (Windows Update, Lenovo Vantage and similar) can restore factory values. Just run <code>-Mode Apply</code> again.</p></details>
+      <details><summary>I get an execution policy error.<i aria-hidden="true"></i></summary><p>Always launch it with <code>powershell -ExecutionPolicy Bypass -File ...</code> as in the examples. It's built for Windows PowerShell 5.1 and also runs on PowerShell 7.</p></details>
+    </div>
+  </div>
+</section>
+
+<section class="final">
+  <div class="wrap">
+    <p class="lbl" data-r style="margin-bottom:28px"><span class="dot"></span>About two minutes, free</p>
+    <h2 data-r>Stop guessing.<br><em class="s">Measure.</em></h2>
+    <div class="ctas" data-r style="--i:1">
+      <a class="btn" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">Download NetTune.ps1<span class="chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v14M6 12l6 6 6-6"/></svg></span></a>
+      <a class="link" href="https://github.com/dmparede/NetTune#readme">Read the docs <span aria-hidden="true">↗</span></a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <p class="ghost" aria-hidden="true">NetTune</p>
+  <div class="wrap foot">
+    <span>NetTune · MIT license · made by <a href="https://github.com/dmparede">Diogo Arede</a></span>
+    <nav aria-label="Footer"><a href="https://github.com/dmparede/NetTune/issues">Report an issue</a><a href="https://github.com/dmparede/NetTune/releases">Releases</a><a href="https://github.com/dmparede/NetTune">GitHub</a></nav>
+  </div>
+</footer>
+
+<script>
+(()=>{
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = s=>document.querySelector(s), $$ = s=>[...document.querySelectorAll(s)];
+
+/* entrance (fail-safe) */
+requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.add('loaded')));
+
+/* ---------- THE TRACE ---------- */
+const cv = $('#trace'), ctx = cv.getContext('2d');
+let W=0,H=0,DPR=1,STEP=7,headX=0,samples=[],pending=null,t=0,calm=0,target=0,running=true,last=0,shown=null;
+const LOGMAX = Math.log10(1001);
+function gen(){
+  const off = Math.random()<.045 ? 250+Math.random()*480 : 38+Math.random()*22;
+  const on  = Math.random()<.002 ? 9 : 2.6+Math.random()*.9;
+  const lossP = .009*(1-calm);
+  return {v: off*(1-calm)+on*calm, loss: Math.random()<lossP};
+}
+let B=[0,0];
+function measureBand(){ const hg=document.querySelector('.hero-grid'), hr=cv.getBoundingClientRect(); const top=Math.max(92,H*.11); const bottom=hg.getBoundingClientRect().top-hr.top-(W<1024?28:44); B=[top, Math.max(top+150, bottom)]; }
+function band(){ return B; }
+function yOf(ms){ const [t0,b0]=band(); return b0 - (Math.log10(ms+1)/LOGMAX)*(b0-t0); }
+function size(){
+  DPR = Math.min(devicePixelRatio||1, 2);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = W*DPR; cv.height = H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0);
+  headX = W - (W<640 ? 22 : W<1024 ? 40 : Math.max(64,(W-1240)/2+64));
+  const n = Math.ceil(headX/STEP)+3;
+  while(samples.length<n) samples.unshift(gen());
+  if(samples.length>n) samples = samples.slice(samples.length-n);
+  if(!pending) pending = gen();
+  measureBand();
+}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  const [t0,b0] = band();
+  // guides
+  ctx.font = '500 10px "JetBrains Mono", monospace'; ctx.textAlign='right';
+  [1,10,100,1000].forEach(g=>{
+    const y = Math.round(yOf(g))+.5;
+    ctx.strokeStyle='rgba(246,238,238,.07)'; ctx.lineWidth=1; ctx.setLineDash([2,6]);
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    ctx.fillStyle='rgba(246,238,238,.32)'; ctx.fillText(g+' ms', W-(W<640?14:24), y-6);
+  });
+  ctx.setLineDash([]);
+  const n = samples.length;
+  const pts = samples.map((s,i)=>({x: headX-(n-1-i+t)*STEP, y: yOf(s.v), loss:s.loss}));
+  const last = samples[n-1];
+  const hv = last.v + (pending.v-last.v)*t;
+  pts.push({x:headX, y:yOf(hv), loss:false});
+  // area
+  const base = yOf(0); const g = ctx.createLinearGradient(0,t0,0,base);
+  g.addColorStop(0,'rgba(255,59,65,.13)'); g.addColorStop(1,'rgba(255,59,65,0)');
+  ctx.fillStyle=g;
+  let open=false;
+  ctx.beginPath();
+  for(let i=0;i<pts.length;i++){
+    const p=pts[i];
+    if(p.loss) continue;
+    if(!open){ctx.moveTo(p.x,base);ctx.lineTo(p.x,p.y);open=true;} else ctx.lineTo(p.x,p.y);
+  }
+  if(open){ctx.lineTo(pts[pts.length-1].x,base);ctx.closePath();}
+  ctx.fill();
+  // line
+  ctx.lineJoin='round'; ctx.lineCap='round';
+  ctx.strokeStyle='#ff3b41'; ctx.lineWidth=2;
+  ctx.shadowColor='rgba(255,59,65,.6)'; ctx.shadowBlur=16;
+  ctx.beginPath(); open=false;
+  const lossMarks=[];
+  for(let i=0;i<pts.length;i++){
+    const p=pts[i];
+    if(p.loss){ open=false; lossMarks.push([p.x, pts[i-1]?pts[i-1].y:p.y]); continue; }
+    if(!open){ctx.moveTo(p.x,p.y);open=true;} else ctx.lineTo(p.x,p.y);
+  }
+  ctx.stroke(); ctx.shadowBlur=0;
+  // loss marks
+  ctx.fillStyle='rgba(255,59,65,.75)'; ctx.font='500 11px "JetBrains Mono", monospace'; ctx.textAlign='center';
+  lossMarks.forEach(([x,y])=>{ ctx.fillStyle='rgba(255,59,65,.8)'; ctx.font='500 11px "JetBrains Mono", monospace'; ctx.fillText('×', x, y-14); ctx.fillStyle='rgba(255,59,65,.45)'; ctx.font='500 9px "JetBrains Mono", monospace'; ctx.fillText('LOSS', x, y-27); });
+  // head
+  const hy = yOf(hv);
+  ctx.fillStyle='rgba(255,59,65,.22)'; ctx.beginPath(); ctx.arc(headX,hy,11,0,7); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(headX,hy,3.5,0,7); ctx.fill();
+}
+function readout(){
+  const tail = samples.slice(-22).filter(s=>!s.loss).map(s=>s.v);
+  const avg = tail.reduce((a,b)=>a+b,0)/Math.max(1,tail.length);
+  shown = shown==null ? avg : shown + (avg-shown)*.18;
+  $('#ms').textContent = shown>=10 ? Math.round(shown) : shown.toFixed(1);
+}
+function tick(now){
+  if(!running){ last=0; return; }
+  const dt = last ? Math.min(.05,(now-last)/1000) : 0; last = now;
+  calm += Math.sign(target-calm)*Math.min(Math.abs(target-calm), dt*1.6);
+  t += dt*70/STEP;
+  while(t>=1){ t-=1; samples.push(pending); samples.shift(); pending = gen(); }
+  draw(); readout();
+  requestAnimationFrame(tick);
+}
+function staticFrame(){
+  // reduced motion: left half spiky, right half tuned
+  const n = samples.length;
+  samples = samples.map((s,i)=>{ calm = i>n*.55?1:0; return gen(); }); calm=1; target=1; pending={v:3,loss:false};
+  draw(); $('#ms').textContent='3.0'; setState(true,true);
+}
+/* typed terminal + toggle */
+const tt=$('#tt'), sw=$('#sw'), swl=$('#swl'), note=$('#note');
+let typing=0;
+function type(str){
+  clearInterval(typing); let i=0; tt.innerHTML='';
+  const html = c=>c.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  if(RM){ tt.innerHTML='<b>PS&gt;</b> '+html(str); return Promise.resolve(); }
+  return new Promise(res=>{ typing=setInterval(()=>{ i++; tt.innerHTML='<b>PS&gt;</b> '+html(str.slice(0,i)); if(i>=str.length){clearInterval(typing);res();} },32); });
+}
+function setState(on,silent){
+  sw.setAttribute('aria-pressed',on); swl.textContent = on?'ON':'OFF';
+  note.textContent = on ? 'After NetTune: adapters tuned, nothing else touched' : 'Before NetTune: power saving + roaming scans';
+  if(!silent) target = on?1:0;
+}
+sw.addEventListener('click', async ()=>{
+  const on = sw.getAttribute('aria-pressed')!=='true';
+  auto=false; clearTimeout(autoT);
+  setState(on,true);
+  await type(on ? '.\\NetTune.ps1 -Mode Apply' : '.\\NetTune.ps1 -Mode Revert');
+  target = on?1:0;
+  if(RM){ calm=target; samples=samples.map(()=>gen()); pending=gen(); shown=null; draw(); readout(); }
+});
+let auto=true, autoT;
+size();
+addEventListener('resize', ()=>{ size(); if(RM) staticFrame(); });
+if(document.fonts) document.fonts.ready.then(()=>{ measureBand(); if(RM) staticFrame(); });
+if(RM){ staticFrame(); tt.innerHTML='<b>PS&gt;</b> .\\NetTune.ps1 -Mode Apply'; cv.classList.add('on'); }
+else{
+  cv.classList.add('on');
+  requestAnimationFrame(tick);
+  tt.innerHTML='<b>PS&gt;</b> ';
+  autoT = setTimeout(async ()=>{ if(!auto) return; await type('.\\NetTune.ps1 -Mode Apply'); if(!auto) return; setState(true); }, 1500);
+  // pause when hero is off-screen or tab hidden
+  const vis = {hero:true, page:true};
+  const resume = ()=>{ const r = vis.hero && vis.page; if(r && !running){ running=true; requestAnimationFrame(tick);} else if(!r) running=false; };
+  new IntersectionObserver(e=>{ vis.hero = e[0].isIntersecting; resume(); }).observe($('.hero'));
+  document.addEventListener('visibilitychange', ()=>{ vis.page = !document.hidden; resume(); });
+}
+
+/* ---------- reveals ---------- */
+const countUp = el=>{
+  const to = +el.dataset.count; if(RM||to===0){ el.textContent=to; return; }
+  const t0 = performance.now(), d=1600;
+  const step = now=>{ const p=Math.min(1,(now-t0)/d), e=1-Math.pow(1-p,3); el.textContent=Math.round(to*e); if(p<1) requestAnimationFrame(step); };
+  el.textContent='0'; requestAnimationFrame(step);
+};
+const targets = $$('[data-r], #steps');
+if('IntersectionObserver' in window && !RM){
+  const io = new IntersectionObserver(es=>es.forEach(e=>{
+    if(!e.isIntersecting) return;
+    e.target.classList.add('in'); e.target.querySelectorAll('[data-count]').forEach(countUp); io.unobserve(e.target);
+  }),{threshold:.15, rootMargin:'0px 0px -6% 0px'});
+  targets.forEach(el=>io.observe(el));
+} else targets.forEach(el=>el.classList.add('in'));
+
+/* ---------- manifesto word reveal ---------- */
+const m = $('#manifesto');
+m.innerHTML = m.textContent.trim().split(/\s+/).map(w=>'<span class="w">'+w+'</span>').join(' ');
+const words = [...m.querySelectorAll('.w')];
+let raf=0;
+const onScroll = ()=>{ raf=0;
+  const r = m.getBoundingClientRect(), vh = innerHeight;
+  const p = Math.min(1, Math.max(0, (vh*.85 - r.top) / (r.height + vh*.4)));
+  const k = p*words.length*1.15;
+  words.forEach((w,i)=>{ w.style.opacity = (0.14 + 0.86*Math.min(1,Math.max(0,k-i))).toFixed(3); });
+};
+if(!RM){ addEventListener('scroll', ()=>{ if(!raf) raf=requestAnimationFrame(onScroll); }, {passive:true}); onScroll(); }
+
+/* ---------- marquee duplicate ---------- */
+const mq=$('#mq'); mq.innerHTML += mq.innerHTML;
+
+/* ---------- copy buttons ---------- */
+const ICON_COPY='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h9"/></svg>';
+const ICON_OK='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>';
+$$('.copy').forEach(b=>{
+  b.innerHTML=ICON_COPY;
+  b.addEventListener('click', async ()=>{
+    const txt=b.dataset.copy;
+    try{ await navigator.clipboard.writeText(txt); }
+    catch{ const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    b.innerHTML=ICON_OK; b.classList.add('ok'); b.setAttribute('aria-label','Copied');
+    setTimeout(()=>{ b.innerHTML=ICON_COPY; b.classList.remove('ok'); b.setAttribute('aria-label','Copy command'); },1400);
+  });
+});
+
+/* ---------- mobile menu ---------- */
+const menu=$('#menu'), burger=$('#burger');
+const setMenu = o=>{ menu.classList.toggle('open',o); burger.setAttribute('aria-expanded',o); document.body.style.overflow = o?'hidden':''; if(o) $('#close').focus(); };
+burger.addEventListener('click', ()=>setMenu(true));
+$('#close').addEventListener('click', ()=>setMenu(false));
+menu.querySelectorAll('a').forEach(a=>a.addEventListener('click', ()=>setMenu(false)));
+addEventListener('keydown', e=>{ if(e.key==='Escape') setMenu(false); });
+addEventListener('resize', ()=>{ if(innerWidth>=1024) setMenu(false); });
+})();
+</script>
+</body>
+</html>
