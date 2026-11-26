@@ -96,7 +96,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$Version   = '1.6.0'
+$Version   = '1.6.1'
 $Root      = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $BackupDir = Join-Path $Root 'backups'
 $LogDir    = Join-Path $Root 'logs'
@@ -651,7 +651,8 @@ function Select-GameTargets {
 function Measure-Target($Target, [int]$Pings, [int]$Index, [int]$Total) {
     $Label = $Target.Label
     $empty = [pscustomobject]@{ Alvo = $Label; Host = $Target.Host; Regiao = $Target.Region; Metodo = $Target.Method; Tipo = $Target.Kind
-                                Min = $null; Media = $null; Max = $null; Jitter = $null; 'Picos>100' = $null; 'Perda%' = 100 }
+                                Min = $null; Media = $null; Max = $null; Jitter = $null; 'Picos>100' = $null; 'Perda%' = 100
+                                Samples = @() }
 
     $address = Resolve-HostV4 $Target.Host
     if (-not $address) { return $empty }
@@ -659,6 +660,9 @@ function Measure-Target($Target, [int]$Pings, [int]$Index, [int]$Total) {
 
     $ping = New-Object System.Net.NetworkInformation.Ping
     $rtts = New-Object System.Collections.Generic.List[double]
+    # Every sample in order, with its time (ms since the start; Rtt = $null if lost), to find periodic spikes.
+    $samples = New-Object System.Collections.Generic.List[object]
+    $clockT = [Diagnostics.Stopwatch]::StartNew()
     $lost = 0
     try {
         if ($useTcp) { [void](Measure-TcpOnce $address 443 1000) }   # warm-up
@@ -666,17 +670,19 @@ function Measure-Target($Target, [int]$Pings, [int]$Index, [int]$Total) {
             $pct = [int](100 * (($Index - 1) * $Pings + $i) / ($Total * $Pings))
             $where = if ($Target.Region) { $Target.Region } else { $address }
             Write-Progress -Id 1 -Activity 'Connection test' -Status ("{0}/{1}  {2}  ({3})   {4} {5}/{6}" -f $Index, $Total, $Label, $where, $(if ($useTcp) { 'tcp' } else { 'ping' }), ($i + 1), $Pings) -PercentComplete $pct
+            $t = $clockT.Elapsed.TotalMilliseconds
+            $rtt = $null
             if ($useTcp) {
                 $ms = Measure-TcpOnce $address 443 1000
-                if ($null -ne $ms) { $rtts.Add([math]::Round($ms, 1)) } else { $lost++ }
+                if ($null -ne $ms) { $rtt = [math]::Round($ms, 1) }
             } else {
                 try {
                     $reply = $ping.Send($address, 1000)
-                    if ($reply.Status -eq 'Success') { $rtts.Add([double]$reply.RoundtripTime) } else { $lost++ }
-                } catch {
-                    $lost++
-                }
+                    if ($reply.Status -eq 'Success') { $rtt = [double]$reply.RoundtripTime }
+                } catch { }
             }
+            if ($null -ne $rtt) { $rtts.Add($rtt) } else { $lost++ }
+            $samples.Add([pscustomobject]@{ T = $t; Rtt = $rtt })
             Start-Sleep -Milliseconds 200
         }
     } finally {
@@ -707,7 +713,54 @@ function Measure-Target($Target, [int]$Pings, [int]$Index, [int]$Total) {
         Jitter      = [math]::Round($jitter, 1)
         'Picos>100' = $spikes
         'Perda%'    = [math]::Round(100.0 * $lost / $Pings, 1)
+        Samples     = $samples.ToArray()
     }
+}
+
+function Find-PeriodicSpikes($Samples) {
+    # Spikes that come back at regular intervals (for example every 3 s). Returns the period in
+    # seconds, or $null. A spike = lost packet or a ping 30 ms (and 3x) above the median.
+    $all = @($Samples)
+    $ok = @($all | Where-Object { $null -ne $_.Rtt } | ForEach-Object { [double]$_.Rtt })
+    if ($ok.Count -lt 10) { return $null }
+    $median = Get-Median $ok
+    $limit = [math]::Max($median + 30, $median * 3)
+
+    $events = New-Object System.Collections.Generic.List[double]
+    $spikeCount = 0
+    $lastSpike = [double]::MinValue
+    foreach ($s in $all) {
+        if ($null -ne $s.Rtt -and $s.Rtt -lt $limit) { continue }
+        $spikeCount++
+        # Spikes less than 1.5 s after the previous one belong to the same burst (one event).
+        if ($s.T - $lastSpike -gt 1500) { $events.Add([double]$s.T) }
+        $lastSpike = [double]$s.T
+    }
+    # Needs at least 4 events, and spikes must be the exception (otherwise it is just an unstable link).
+    if ($events.Count -lt 4 -or $spikeCount -gt 0.3 * $all.Count) { return $null }
+
+    $gaps = @(for ($i = 1; $i -lt $events.Count; $i++) { $events[$i] - $events[$i - 1] })
+    $avg = ($gaps | Measure-Object -Average).Average
+    $var = 0.0
+    foreach ($gap in $gaps) { $var += [math]::Pow($gap - $avg, 2) }
+    $sd = [math]::Sqrt($var / $gaps.Count)
+    # Regular = the gaps vary at most 20% around the average.
+    if ($avg -lt 2000 -or $sd / $avg -gt 0.2) { return $null }
+    return [math]::Round($avg / 1000, 1)
+}
+
+function Test-ActiveIsWifi {
+    # Is the adapter carrying the internet traffic a Wi-Fi one?
+    $route = Get-ActiveRoute
+    if (-not $route) { return $false }
+    $a = Get-NetAdapter -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue
+    if (-not $a) { return $false }
+    return ([string]$a.PhysicalMediaType -match '802\.11') -or ($a.InterfaceDescription -match 'Wi-?Fi|Wireless|WLAN|802\.11')
+}
+
+function Get-PendingTweakCount {
+    # Same count as Show-AdapterState, without the output (6>$null hides Write-Host).
+    return [int](Show-AdapterState 6>$null)
 }
 
 # Results table columns: title, width.
@@ -823,8 +876,30 @@ function Invoke-NetTest([string]$Title) {
             }
             'bad'  {
                 Write-Bad   'Router connection is unstable: it should be 1-5 ms and stable.'
-                Write-Info  'The problem is local (adapter, driver or Wi-Fi), not your ISP or the game.' 4
+                if ((Get-PendingTweakCount) -gt 0) {
+                    Write-Info  'The problem is local (adapter, driver or Wi-Fi), not your ISP or the game.' 4
+                } else {
+                    # The adapter is already tuned: what is left is the Wi-Fi itself or the router.
+                    $onWifi = Test-ActiveIsWifi
+                    if ($onWifi) {
+                        Write-Info 'The adapter settings are already optimized, so the spikes come from the Wi-Fi or the router' 4
+                        Write-Info 'itself: interference, other devices using the network, or a router that got stuck.' 4
+                    } else {
+                        Write-Info 'The adapter settings are already optimized, so the spikes come from the router or the network' 4
+                        Write-Info 'itself: other devices using the network, or a router that got stuck.' 4
+                    }
+                    Write-Info 'What to try:' 4
+                    if ($onWifi) { Write-Info 'Test with a network cable: if the spikes go away, the Wi-Fi is the cause.' 6 }
+                    Write-Info 'Close downloads and updates in the background (Steam, Windows Update, OneDrive, other devices).' 6
+                    Write-Info 'Restart the router: unplug it from power for 30 s, then test again.' 6
+                }
             }
+        }
+
+        $period = Find-PeriodicSpikes $router.Samples
+        if ($period) {
+            Write-Warn2 "The router spikes repeat at regular intervals (about every $period s)."
+            Write-Info  'That pattern usually means the router is stuck on something: restart it (unplug it from power for 30 s).' 4
         }
     }
     return $results
@@ -1104,7 +1179,8 @@ function Invoke-DnsBenchmark {
 
     # Decision
     $choice = $null
-    $curLocal  = @($rows | Where-Object { $_.IsCurrent -and $_.IsLocal })
+    $kept   = $null   # public DNS already in use and kept
+    $curLocal  =@($rows | Where-Object { $_.IsCurrent -and $_.IsLocal })
     $curPreset = @($valid | Where-Object { $_.IsCurrent -and $_.Preset }) | Sort-Object Score | Select-Object -First 1
     $publicRows = @($rows | Where-Object { $_.Preset })
     Write-Host ''
@@ -1115,9 +1191,11 @@ function Invoke-DnsBenchmark {
         Write-Warn2 'No public DNS answered reliably (too many failures). Keeping the current one.'
     } elseif ($winner.IsCurrent) {
         Write-Ok "You already use $($winner.Preset), the best one here. Leaving it as is."
+        $kept = $winner.Preset
     } elseif ($curPreset -and $curPreset.Score - $winner.Score -lt $margin) {
         # Already on a public DNS and the difference is small: not worth switching between public ones.
         Write-Ok "You already use $($curPreset.Preset) and $($winner.Preset) is only $(Format-Num ($curPreset.Score - $winner.Score)) ms better. Leaving it as is."
+        $kept = $curPreset.Preset
     } else {
         $choice = $winner.Preset
         if ($curLocal.Count -gt 0) {
@@ -1132,9 +1210,31 @@ function Invoke-DnsBenchmark {
         Write-Info "Apply sets on every adapter  IPv4: $v4" 4
         Write-Host "                                   IPv6: $v6" -ForegroundColor Gray
     }
+
+    # The IPv4 already is Cloudflare but the IPv6 may still be the router's / ISP's: Apply sets it too.
+    $v6Fix = $null
+    if ($kept -eq 'Cloudflare') {
+        $route = Get-ActiveRoute
+        if ($route) {
+            $want6 = @($DnsPresets.Cloudflare | Where-Object { $_ -match ':' })
+            $now6 = @(Get-AdapterDnsList $route.InterfaceIndex 'IPv6')
+            $act = Get-NetAdapter -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue
+            if ($act -and (Test-AdapterIPv6 $act) -and -not (Test-SameList $now6 $want6)) {
+                $v6Fix = 'Cloudflare'
+                $nowText = if ($now6.Count -gt 0) { ($now6 | Select-Object -First 2) -join ', ' } else { 'automatic' }
+                Write-Warn2 "The IPv6 DNS is not Cloudflare yet (now: $nowText)."
+                Write-Info "Apply sets it too: $($want6 -join ', ')" 4
+            }
+        }
+    }
     Write-Info 'Note: DNS speeds up opening sites and connecting to services. It does not change in-game ping.'
 
-    return [pscustomobject]@{ Choice = $choice }
+    return [pscustomobject]@{ Choice = $choice; V6Fix = $v6Fix }
+}
+
+function Test-AdapterIPv6($Adapter) {
+    # Is IPv6 enabled on the adapter? If it cannot be read, assume yes.
+    try { return [bool](Get-NetAdapterBinding -Name $Adapter.Name -ComponentID ms_tcpip6 -ErrorAction Stop).Enabled } catch { return $true }
 }
 
 # ---------------------------------------------------------------- adapter state
@@ -1250,9 +1350,14 @@ function Invoke-Apply {
 
     # DNS: Auto = test and use the fastest (if worth it); Keep = do not touch; a name = force that one.
     $dnsChoice = $null
+    $dnsV6Fix  = $null   # IPv4 already is this DNS, only the IPv6 is missing
     switch ($Dns) {
         'Keep'  { }
-        'Auto'  { $dnsChoice = (Invoke-DnsBenchmark).Choice }
+        'Auto'  {
+            $bench = Invoke-DnsBenchmark
+            $dnsChoice = $bench.Choice
+            $dnsV6Fix  = $bench.V6Fix
+        }
         default {
             # Forced: first check that this DNS answers on this network (some networks block external DNS).
             $okCount = 0
@@ -1412,24 +1517,33 @@ function Invoke-Apply {
         }
 
         # 4) DNS: IPv4 and IPv6 set by hand, each family separately, and confirmed by reading them back.
-        if ($dnsChoice) {
-            $want4 = @($DnsPresets[$dnsChoice] | Where-Object { $_ -notmatch ':' })
-            $want6 = @($DnsPresets[$dnsChoice] | Where-Object { $_ -match ':' })
+        #    $dnsV6Fix: only the IPv6, and only on adapters whose IPv4 already is that DNS.
+        $dnsPreset = if ($dnsChoice) { $dnsChoice } else { $dnsV6Fix }
+        if ($dnsPreset) {
+            $want4 = @($DnsPresets[$dnsPreset] | Where-Object { $_ -notmatch ':' })
+            $want6 = @($DnsPresets[$dnsPreset] | Where-Object { $_ -match ':' })
             $now4  = @(Get-AdapterDnsList $a.ifIndex 'IPv4')
             $now6  = @(Get-AdapterDnsList $a.ifIndex 'IPv6')
-            $v6On = $true
-            try { $v6On = [bool](Get-NetAdapterBinding -Name $a.Name -ComponentID ms_tcpip6 -ErrorAction Stop).Enabled } catch { }
+            $v6On  = Test-AdapterIPv6 $a
 
-            $need4 = -not (Test-SameList $now4 $want4)
-            $need6 = $v6On -and -not (Test-SameList $now6 $want6)
-            if (-not $need4 -and -not $need6) {
-                Write-Info "DNS: already $dnsChoice" 4
+            if ($dnsChoice) {
+                $touch = $true
+                $need4 = -not (Test-SameList $now4 $want4)
+            } else {
+                $touch = ($now4.Count -gt 0) -and (@($now4 | Where-Object { $want4 -notcontains $_ }).Count -eq 0)
+                $need4 = $false
+            }
+            $need6 = $touch -and $v6On -and -not (Test-SameList $now6 $want6)
+            if (-not $touch) {
+                # IPv6 fix only and this adapter's IPv4 is not that DNS: leave it alone.
+            } elseif (-not $need4 -and -not $need6) {
+                Write-Info "DNS: already $dnsPreset" 4
             } else {
                 $entry.Dns = Get-DnsBackup $a
                 foreach ($fam in @(@('IPv4', $need4, $now4, $want4), @('IPv6', $need6, $now6, $want6))) {
                     if (-not $fam[1]) { continue }
                     $from = if (@($fam[2]).Count -gt 0) { (@($fam[2]) | Select-Object -First 2) -join ', ' } else { 'automatic' }
-                    $to = "$dnsChoice (" + (@($fam[3]) -join ', ') + ')'
+                    $to = "$dnsPreset (" + (@($fam[3]) -join ', ') + ')'
                     if ($PSCmdlet.ShouldProcess($a.Name, "DNS $($fam[0]) -> $to")) {
                         $after = @(Set-AdapterDnsFamily $a $fam[0] @($fam[3]))
                         if (Test-SameList $after @($fam[3])) {
@@ -1443,7 +1557,7 @@ function Invoke-Apply {
                     }
                 }
             }
-            if (-not $v6On) { Write-Info 'DNS IPv6: IPv6 is disabled on this adapter, only IPv4 was needed.' 4 }
+            if ($touch -and -not $v6On) { Write-Info 'DNS IPv6: IPv6 is disabled on this adapter, only IPv4 was needed.' 4 }
         }
 
         # Restart the adapter only once, to apply everything
@@ -1476,16 +1590,22 @@ function Invoke-Apply {
         return
     }
 
-    if ($dnsChoice) { Clear-DnsClientCache -ErrorAction SilentlyContinue }
+    if ($script:ChangeCount -eq 0) {
+        # Nothing changed: the network did not drop and an "after" test would only repeat the "before" one.
+        Write-Host ''
+        Write-Info 'Nothing was changed, so there is no "after" test.'
+    } else {
+        if ($dnsChoice -or $dnsV6Fix) { Clear-DnsClientCache -ErrorAction SilentlyContinue }
 
-    Write-Host ''
-    Write-Info 'Waiting for the network to come back...'
-    if (-not (Wait-Network 40)) { Write-Warn2 'The network took a while to come back. Check the connection before the test.' }
-    Start-Sleep -Seconds 3
+        Write-Host ''
+        Write-Info 'Waiting for the network to come back...'
+        if (-not (Wait-Network 40)) { Write-Warn2 'The network took a while to come back. Check the connection before the test.' }
+        Start-Sleep -Seconds 3
 
-    if (-not $SkipTest) {
-        $after = Invoke-NetTest 'Test after the tweaks'
-        if ($before) { Show-Comparison $before $after }
+        if (-not $SkipTest) {
+            $after = Invoke-NetTest 'Test after the tweaks'
+            if ($before) { Show-Comparison $before $after }
+        }
     }
 
     $n = $script:ChangeCount
@@ -1659,13 +1779,18 @@ try {
             $pending = Show-AdapterState
             [void](Invoke-NetTest 'Connection test')
             $dnsChoice = $null
+            $dnsV6Fix  = $null
             if ($Dns -ne 'Keep') {
-                $dnsChoice = (Invoke-DnsBenchmark).Choice
-                if ($dnsChoice) { $pending++ }
+                $bench = Invoke-DnsBenchmark
+                $dnsChoice = $bench.Choice
+                $dnsV6Fix  = $bench.V6Fix
+                if ($dnsChoice -or $dnsV6Fix) { $pending++ }
             }
             $lines = @()
             if ($dnsChoice) {
                 $lines += ,@($G.Star, 'Green', "Best DNS: $dnsChoice (Apply sets it, IPv4 and IPv6)")
+            } elseif ($dnsV6Fix) {
+                $lines += ,@($G.Star, 'Green', "DNS: IPv4 already $dnsV6Fix, Apply sets the IPv6 too")
             }
             if ($pending -gt 0) {
                 $lines += ,@($G.Warn, 'Yellow', "$pending tweak(s) to do (marked with $($G.Warn) above)")

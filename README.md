@@ -107,9 +107,13 @@ In Test mode, the summary at the end says how many tweaks are left.
 
 With few pings (for example `-Count 5`), a single lost packet is already 20% and the row turns red. For a proper diagnosis use the default of 50.
 
-**Before vs after** (in Apply). Shows the average, jitter and loss with a green `▼` when it improved, a red `▲` when it got worse and `=` when it stayed the same.
+**Before vs after** (in Apply). Shows the average, jitter and loss with a green `▼` when it improved, a red `▲` when it got worse and `=` when it stayed the same. If Apply changed nothing, the "after" test and this table are skipped.
 
-**The golden rule:** if the ping to the **router** is high or has spikes, the problem is your PC or the Wi-Fi, not your ISP or the game. The router is right next to you; 1-5 ms is normal.
+**The golden rule:** if the ping to the **router** is high or has spikes, the problem is your PC, the Wi-Fi or the router, not your ISP or the game. The router is right next to you; 1-5 ms is normal.
+
+- If some adapter settings are still unoptimized, the script points at the adapter / driver (Apply fixes those).
+- If they are **all already optimized**, the spikes come from the Wi-Fi or the router itself (interference, other devices using the network, a stuck router). The script suggests testing with a cable, closing background downloads and restarting the router (30 s unplugged from power).
+- If the router spikes come back **at regular intervals**, the script says so and recommends restarting the router. With the default 50 pings it catches repeats every 2-4 s; use `-Count 200` to catch slower ones.
 
 ## DNS test
 
@@ -121,6 +125,7 @@ By default (`-Dns Auto`), Test and Apply modes test **Cloudflare**, **Google**, 
 - **How it chooses:** score = 70% median + 30% uncached, only among public DNS servers with up to 10% failures. Differences up to **5 ms (or 20%)** count as a tie, because the same server varies that much between runs. On a tie it prefers **Cloudflare**, then Google (Quad9 and OpenDNS filter domains).
 - **When it switches:** if your DNS is the router or your ISP's, it switches to the chosen one. If you already use a public DNS, it only switches if the other one is better by more than the tie margin.
 - **How it applies:** on each adapter, **IPv4 and IPv6 separately**, set by hand (`netsh`, by adapter index). Then it reads each family back and only shows `✓` if it was really applied. If IPv6 is disabled on the adapter, it only sets IPv4.
+- **IPv4 already Cloudflare, IPv6 not:** when you keep Cloudflare but the IPv6 DNS is still automatic (router / ISP), Apply also sets the Cloudflare IPv6 (`2606:4700:4700::1111`, `2606:4700:4700::1001`) on the adapters whose IPv4 is Cloudflare, with the same backup and Revert.
 - **Backup and Revert:** the old DNS of each family is stored in the backup. Revert restores each one (the old static list, or automatic/DHCP if there was none).
 - **Networks that block external DNS** (schools, offices, some public networks): the public DNS servers show up as "no response" and the script **changes nothing**, because changing would cut your internet. With `-Dns Cloudflare` (forced), the script first checks that DNS answers. If it does not, it refuses.
 - **Honesty:** DNS only speeds up opening sites and connecting to services (login, stores, matchmaking). **It does not change in-game ping.**
@@ -159,6 +164,15 @@ Both folders are in `.gitignore`, because they are specific to each PC.
 - An adapter driver update (Windows Update or Lenovo Vantage, for example) can restore the factory values. If the spikes come back, run `-Mode Apply` again.
 - If you get an execution policy error, always use `powershell -ExecutionPolicy Bypass -File ...` as in the examples.
 - Built for PowerShell 5.1 (the one that ships with Windows). It also runs on PowerShell 7.
+
+## Changelog
+
+### 1.6.1
+
+- **Apply with nothing to change:** skips the "waiting for the network" step, the "after" test and the "Before vs after" table, and just says nothing was changed.
+- **Clearer router diagnosis:** when the router is unstable but every adapter setting is already optimized, the script no longer blames the adapter or driver. It says the spikes come from the Wi-Fi or the router itself and suggests testing with a cable, closing background downloads and restarting the router (30 s unplugged).
+- **Periodic spikes:** detects router spikes that repeat at regular intervals and recommends restarting the router.
+- **Cloudflare IPv6:** if the IPv4 DNS is already Cloudflare but the IPv6 is not, Apply also sets the Cloudflare IPv6 servers on that adapter, with backup and Revert.
 
 ## License
 
