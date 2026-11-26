@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>NetTune · Stable ping, no placebo</title>
-<meta name="description" content="NetTune is a free PowerShell script for Windows 10/11 that measures your connection, applies only the network tweaks that actually lower latency, and measures again to prove it. Backup and one-command revert included.">
+<meta name="description" content="NetTune 1.7.0 is a free PowerShell script for Windows 10/11 that measures your connection, applies the network tweaks that actually lower latency (plus the TCP Optimizer set, honestly labeled), finds the right MTU and measures again to prove it. Backup and one-command revert included.">
 <meta name="theme-color" content="#0a0506">
 <meta property="og:title" content="NetTune · Stable ping, no placebo">
 <meta property="og:description" content="Measure. Fix. Prove it. A free, open-source PowerShell script that kills Wi-Fi lag spikes on Windows.">
@@ -70,7 +70,7 @@ em.s{font-family:var(--serif);font-style:italic;font-weight:400;color:var(--fg60
 .menu.open{opacity:1;visibility:visible}
 .menu a{font:500 36px/1.25 var(--sans);letter-spacing:-.035em;opacity:0;transform:translateY(16px);transition:opacity .45s var(--ease),transform .45s var(--ease)}
 .menu.open a{opacity:1;transform:none}
-.menu a:nth-child(2){transition-delay:.05s}.menu a:nth-child(3){transition-delay:.1s}.menu a:nth-child(4){transition-delay:.15s}.menu a:nth-child(5){transition-delay:.2s}
+.menu a:nth-child(2){transition-delay:.05s}.menu a:nth-child(3){transition-delay:.1s}.menu a:nth-child(4){transition-delay:.15s}.menu a:nth-child(5){transition-delay:.2s}.menu a:nth-child(6){transition-delay:.25s}.menu a:nth-child(7){transition-delay:.3s}
 .menu .close{position:absolute;top:24px;right:var(--gut)}
 
 /* hero */
@@ -147,6 +147,24 @@ h2{margin:0;font:500 clamp(38px,5.6vw,76px)/1 var(--sans);letter-spacing:-.04em;
 .trow h3{margin:0;font:500 20px/1.3 var(--sans);letter-spacing:-.02em}
 .trow p{margin:8px 0 0;font-size:15px;color:var(--fg60);max-width:46ch}
 code{font:400 .88em var(--mono);color:var(--fg80);background:rgba(255,255,255,.06);padding:.1em .35em;border-radius:5px}
+
+.trow p .link{font-size:inherit;padding:0}
+.fixes-lbl{display:flex;align-items:center;gap:14px;margin:clamp(56px,7vw,88px) 0 26px}
+.fixes-lbl::after{content:"";width:56px;height:1px;background:var(--fg20)}
+.fixes{display:grid;grid-template-columns:1fr 1fr;gap:26px 72px}
+.fixes .note{margin:0}
+
+.fx{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;align-items:start}
+.fxc{border-radius:22px;padding:24px 24px 8px}
+.fxc .lbl{display:flex;align-items:center;margin:0 0 10px}
+.fxc h3{margin:0 0 16px;font:500 22px/1.2 var(--sans);letter-spacing:-.02em}
+.fxc ul{list-style:none;margin:0;padding:0}
+.fxc li{display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:12px 0;border-top:1px solid var(--line);font-size:14.5px;color:var(--fg80)}
+.fxc li small{display:block;margin-top:3px;font-size:12.5px;line-height:1.4;color:var(--fg40)}
+.fxc li span{flex:0 0 auto;font:400 12.5px/1.5 var(--mono);color:var(--fg40);white-space:nowrap}
+.dot.mid{background:var(--fg60);box-shadow:none}
+.dot.off{background:transparent;box-shadow:inset 0 0 0 1px var(--fg40)}
+.fx-note{margin:24px 0 0;max-width:72ch;font-size:14px;color:var(--fg40)}
 
 .sheet{background:var(--bg2);border-radius:44px 44px 0 0;position:relative}
 .nope{border-top:1px solid var(--line)}
@@ -234,6 +252,8 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
   .story-grid,.usage{grid-template-columns:1fr;gap:40px}
   .story-grid .sh{position:static}
   .tlist{grid-template-columns:1fr}
+  .fixes{grid-template-columns:1fr}
+  .fx{grid-template-columns:1fr}
   .steps{grid-template-columns:1fr 1fr;row-gap:48px}
   .shots{grid-template-columns:1fr}
   .nrow{grid-template-columns:1fr;gap:12px}
@@ -277,11 +297,11 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
       NetTune
     </a>
     <nav class="links glass rise" style="--d:.05s" aria-label="Primary">
-      <a href="#story">Story</a><a href="#tweaks">Tweaks</a><a href="#usage">Usage</a><a href="#faq">FAQ</a>
+      <a href="#new">What's new</a><a href="#tweaks">Tweaks</a><a href="#usage">Usage</a><a href="#faq">FAQ</a>
     </nav>
     <div class="nav-r rise" style="--d:.1s">
       <a class="icon-btn glass" href="https://github.com/dmparede/NetTune" aria-label="NetTune on GitHub"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.82 1.19 3.08 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
-      <a class="btn sm" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">Download</a>
+      <a class="btn sm" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">Download 1.7.0</a>
       <button class="icon-btn glass burger" id="burger" aria-label="Open menu" aria-expanded="false" aria-controls="menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 8h16M4 16h16"/></svg></button>
     </div>
   </div>
@@ -289,8 +309,8 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
 
 <nav class="menu" id="menu" aria-label="Menu">
   <button class="icon-btn glass close" id="close" aria-label="Close menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
-  <a href="#story">Story</a><a href="#tweaks">Tweaks</a><a href="#usage">Usage</a><a href="#faq">FAQ</a>
-  <a href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1" style="color:var(--red)">Download ↓</a>
+  <a href="#story">Story</a><a href="#new">What's new</a><a href="#tweaks">Tweaks</a><a href="#usage">Usage</a><a href="#faq">FAQ</a>
+  <a href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1" style="color:var(--red)">Download 1.7.0 ↓</a>
 </nav>
 
 <main id="top">
@@ -299,12 +319,12 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
   <div class="hero-in wrap">
     <div class="hero-grid">
       <div class="hero-copy">
-        <p class="eyebrow lbl rise" style="--d:.15s"><span class="dot"></span>v1.6.0 · Windows 10/11 · Free &amp; MIT</p>
+        <p class="eyebrow lbl rise" style="--d:.15s"><span class="dot"></span><a href="https://github.com/dmparede/NetTune/releases/tag/v1.7.0">v1.7.0</a> · Windows 10/11 · Free &amp; MIT</p>
         <h1><span class="ln"><span style="--d:.25s">Stable ping.</span></span><span class="ln"><span style="--d:.37s">No <em class="s">placebo.</em></span></span></h1>
-        <p class="sub rise" style="--d:.55s">NetTune measures your connection, changes only the network settings that actually move latency, then measures again to prove it. One command undoes everything.</p>
+        <p class="sub rise" style="--d:.55s">NetTune measures your connection, fixes the settings that actually move latency, labels everything else honestly, then measures again to prove it. One command undoes everything.</p>
         <div class="ctas rise" style="--d:.7s">
-          <a class="btn" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">Download NetTune<span class="chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v14M6 12l6 6 6-6"/></svg></span></a>
-          <a class="link" href="https://github.com/dmparede/NetTune">Read the source <span aria-hidden="true">↗</span></a>
+          <a class="btn" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">Download NetTune 1.7.0<span class="chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v14M6 12l6 6 6-6"/></svg></span></a>
+          <a class="link" href="#new">What's new in 1.7.0 <span aria-hidden="true">↓</span></a>
         </div>
       </div>
       <aside class="meter glass rise" style="--d:.85s" aria-label="Router ping simulation">
@@ -322,7 +342,7 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
   <div class="wrap">
     <div class="stat" data-r style="--i:0"><b><s>144</s> → <span data-count="3">3</span><sub>ms</sub></b><p>Average router ping after Apply, on a Wi-Fi 7 laptop</p></div>
     <div class="stat" data-r style="--i:1"><b><span data-count="9">9</span></b><p>Targets tested: router, DNS and the closest game servers</p></div>
-    <div class="stat" data-r style="--i:2"><b><span data-count="0">0</span></b><p>Placebo registry tweaks. Only what measurably helps</p></div>
+    <div class="stat" data-r style="--i:2"><b><span data-count="0">0</span></b><p>Unverified changes. Every value is read back and saved to the backup</p></div>
     <div class="stat" data-r style="--i:3"><b><span data-count="1">1</span></b><p>Command to undo everything, from an automatic backup</p></div>
   </div>
 </div>
@@ -337,12 +357,37 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
   </div>
 </section>
 
+<section class="sec" id="new" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh" data-r>
+      <p class="lbl">02 · New in 1.7.0</p>
+      <h2>More measured. <em class="s">Still honest.</em></h2>
+      <p class="lead">An MTU test, the TCP Optimizer set with honest labels, and a test that carries on by itself after the restart. <a class="link" href="https://github.com/dmparede/NetTune/releases/tag/v1.7.0">Release notes <span aria-hidden="true">↗</span></a></p>
+    </div>
+    <div class="tlist">
+      <div class="trow" data-r style="--i:0"><span class="n">01</span><div><h3>Automatic MTU test</h3><p>Don't Fragment pings with a binary search to <code>1.1.1.1</code>, <code>8.8.8.8</code> and <code>9.9.9.9</code>. Every step is retried, and the result is confirmed: 5 of 5 pings pass and one byte more always fails. The MTU only changes if 1500 doesn't fit on your network. Skip it with <code>-NoMtu</code>.</p></div></div>
+      <div class="trow" data-r style="--i:1"><span class="n">02</span><div><h3>Carries on after the restart</h3><p>Answer <code>y</code> to "Restart now?" and NetTune saves the "before" test, then runs once at your next logon. It waits for the network, warns if you are on a different one, and shows a Before vs After that includes the registry values.</p></div></div>
+      <div class="trow" data-r style="--i:0"><span class="n">03</span><div><h3>Nagle stays on Wi-Fi</h3><p>Windows rebuilds the Wi-Fi adapter's TCP/IP settings on every network change, wiping the Nagle values. NetTune writes them to every network, and a small SYSTEM task writes them again whenever a network connects. Revert removes the task and every value.</p></div></div>
+      <div class="trow" data-r style="--i:1"><span class="n">04</span><div><h3>The TCP Optimizer set, labeled</h3><p>TCP globals, offloads, Nagle, MMCSS and registry values, on by default. Each one is marked with what it really changes: <a class="link" href="#tcp">see the table</a>. Skip them all with <code>-NoTcp</code>.</p></div></div>
+      <div class="trow" data-r style="--i:0"><span class="n">05</span><div><h3>Every change read back</h3><p>✓ when it stuck, ✗ when it didn't, <b>!</b> when your Windows keeps it read-only. The backup now covers everything, including values that didn't exist before, so Revert deletes them.</p></div></div>
+      <div class="trow" data-r style="--i:1"><span class="n">06</span><div><h3>Visible progress</h3><p>A live status line during the region search and the MTU test. MTU rows appear as soon as each target finishes, so it never looks stuck.</p></div></div>
+    </div>
+    <p class="lbl fixes-lbl" data-r>Fixes</p>
+    <div class="fixes">
+      <p class="note" data-r style="--i:0"><b>SystemResponsiveness 10, not 0</b>Microsoft documents that below 10 Windows uses 20, so NetTune sets 10.</p>
+      <p class="note" data-r style="--i:1"><b>Revert keeps a static DNS on Wi-Fi</b>Wi-Fi can keep a static DNS in <code>ProfileNameServer</code>. The backup now reads it, so Revert puts it back instead of switching to automatic.</p>
+      <p class="note" data-r style="--i:0"><b>No "after" test when nothing changed</b>If Apply changes nothing, it skips the network wait, the after test and the Before vs After table.</p>
+      <p class="note" data-r style="--i:1"><b>Router spikes, properly diagnosed</b>Unstable router but every adapter setting already optimized? It points at the Wi-Fi or the router (test with a cable, close background downloads, unplug the router for 30 s), and flags spikes that repeat at regular intervals.</p>
+    </div>
+  </div>
+</section>
+
 <section class="sec" id="tweaks" style="padding-top:0">
   <div class="wrap">
     <div class="sh" data-r>
-      <p class="lbl">02 · What it tweaks</p>
-      <h2>Eight settings. <em class="s">That's it.</em></h2>
-      <p class="lead">Applied to every physical adapter: Wi-Fi, Ethernet and USB. Option names are recognised in English, Portuguese and Spanish drivers.</p>
+      <p class="lbl">03 · Latency fixes</p>
+      <h2>The fixes that <em class="s">move ping.</em></h2>
+      <p class="lead">Always applied, to every physical adapter: Wi-Fi, Ethernet and USB. Driver options are found by their registry keyword, so they're recognised in any Windows language.</p>
     </div>
     <div class="tlist">
       <div class="trow" data-r style="--i:0"><span class="n">01</span><div><h3>Wi-Fi power plan</h3><p>"Wireless Adapter Settings" set to maximum performance, so gaming on battery stops causing spikes.</p></div></div>
@@ -350,23 +395,76 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
       <div class="trow" data-r style="--i:0"><span class="n">03</span><div><h3>Adapter power saving off</h3><p>The card stops dozing between packets, which is what makes it slow to wake up mid-game.</p></div></div>
       <div class="trow" data-r style="--i:1"><span class="n">04</span><div><h3>Roaming at lowest</h3><p>No more scanning for other access points during a match. Every scan freezes the connection.</p></div></div>
       <div class="trow" data-r style="--i:0"><span class="n">05</span><div><h3>Green Ethernet &amp; EEE off</h3><p>Energy-Efficient Ethernet causes the same problem on a cable. USB selective suspend goes too.</p></div></div>
-      <div class="trow" data-r style="--i:1"><span class="n">06</span><div><h3>RSC off</h3><p>Receive Segment Coalescing merges packets to save CPU. Great for downloads, bad for latency.</p></div></div>
-      <div class="trow" data-r style="--i:0"><span class="n">07</span><div><h3>Fastest DNS, only if it wins</h3><p>Tests Cloudflare, Google, Quad9 and OpenDNS with uncached queries and switches only when one clearly wins.</p></div></div>
+      <div class="trow" data-r style="--i:1"><span class="n">06</span><div><h3>An MTU that fits</h3><p>Measured on your network. Changed only if it can't carry 1500, which is when big packets get fragmented or dropped.</p></div></div>
+      <div class="trow" data-r style="--i:0"><span class="n">07</span><div><h3>Fastest DNS, only if it wins</h3><p>Tests Cloudflare, Google, Quad9 and OpenDNS with uncached queries and switches only when one clearly wins. Faster lookups, not lower ping.</p></div></div>
       <div class="trow" data-r style="--i:1"><span class="n">08</span><div><h3>Backup &amp; revert</h3><p>Every original value is saved to JSON before anything changes. <code>-Mode Revert</code> puts it all back.</p></div></div>
     </div>
+  </div>
+</section>
+
+<section class="sec" id="tcp" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh" data-r>
+      <p class="lbl">04 · The TCP Optimizer set</p>
+      <h2>Included. <em class="s">Labeled honestly.</em></h2>
+      <p class="lead">On by default in Apply, skip it with <code>-NoTcp</code>. Games use UDP, so most of these don't touch in-game ping. Each one is filed under what it really changes.</p>
+    </div>
+    <div class="fx">
+      <div class="fxc glass" data-r style="--i:0">
+        <p class="lbl"><span class="dot"></span>Small or indirect</p>
+        <h3>Can touch games</h3>
+        <ul>
+          <li><div>RSS<small>Spreads received packets over CPU cores. Matters on fast wired NICs</small></div><span>on</span></li>
+          <li><div>NetworkThrottlingIndex<small>MMCSS throttling off. Only while audio or video plays</small></div><span>0xffffffff</span></li>
+        </ul>
+      </div>
+      <div class="fxc glass" data-r style="--i:1">
+        <p class="lbl"><span class="dot mid"></span>TCP only</p>
+        <h3>Downloads &amp; sites</h3>
+        <ul>
+          <li><div>Scaling heuristics</div><span>off</span></li>
+          <li><div>Receive window auto-tuning</div><span>normal</span></li>
+          <li><div>Timestamps<small>12 bytes less per TCP packet</small></div><span>off</span></li>
+          <li><div>RSC</div><span>off</span></li>
+          <li><div>LSO<small>Avoids bursts on upload</small></div><span>off</span></li>
+          <li><div>TcpTimedWaitDelay</div><span>30</span></li>
+          <li><div>Nagle (TcpAckFrequency, TCPNoDelay, TcpDelAckTicks)<small>A few older TCP-based games</small></div><span>1 / 1 / 0</span></li>
+        </ul>
+      </div>
+      <div class="fxc glass" data-r style="--i:2">
+        <p class="lbl"><span class="dot off"></span>No real effect</p>
+        <h3>Parity &amp; defaults</h3>
+        <ul>
+          <li><div>Initial RTO</div><span>2000 ms</span></li>
+          <li><div>Max SYN retransmissions</div><span>2</span></li>
+          <li><div>Non-SACK RTT resiliency</div><span>off</span></li>
+          <li><div>Packet coalescing</div><span>off</span></li>
+          <li><div>Checksum offload<small>Only switched on if it was off</small></div><span>on</span></li>
+          <li><div>DefaultTTL</div><span>64</span></li>
+          <li><div>MaxUserPort</div><span>65534</span></li>
+          <li><div>SystemResponsiveness<small>10, not 0: below 10 Windows uses 20</small></div><span>10</span></li>
+          <li><div>ServiceProvider priorities</div><span>4 / 5 / 6 / 7</span></li>
+          <li><div>Psched NonBestEffortLimit</div><span>0</span></li>
+          <li><div>QoS "Do not use NLA"</div><span>1</span></li>
+          <li><div>IE max connections per server</div><span>10</span></li>
+          <li><div>LargeSystemCache</div><span>0</span></li>
+        </ul>
+      </div>
+    </div>
+    <p class="fx-note" data-r>Registry values take effect after a restart. Left alone: congestion provider (CUBIC), ECN and MinRto (read-only on Windows 10/11). Not included: Chimney, NetDMA and DCA, which are obsolete and give errors on Windows 11. Values your Windows keeps read-only are reported with <b>!</b> and skipped.</p>
   </div>
 </section>
 
 <section class="sec sheet">
   <div class="wrap">
     <div class="sh" data-r>
-      <p class="lbl">03 · What it won't do</p>
-      <h2>No miracle <em class="s">tweaks.</em></h2>
-      <p class="lead">Most "gaming network optimizers" flip dozens of settings that do nothing for in-game ping. NetTune skips them on purpose.</p>
+      <p class="lbl">05 · What it won't do</p>
+      <h2>No miracle <em class="s">promises.</em></h2>
+      <p class="lead">Most "gaming network optimizers" flip dozens of settings and promise lower ping. NetTune tells you what each one really changes.</p>
     </div>
     <div class="nope">
-      <div class="nrow" data-r><h3>TCP tweaks</h3><p>Nagle, <code>TcpAckFrequency</code>, <code>TCPNoDelay</code>. Games use UDP, so these change nothing during a match.</p></div>
-      <div class="nrow" data-r><h3>NetworkThrottlingIndex &amp; co.</h3><p>No evidence they improve ping, and some of them make other things worse.</p></div>
+      <div class="nrow" data-r><h3>"TCP tweaks lower your ping"</h3><p>Games use UDP. The TCP Optimizer set is included because people ask for it, labeled with what each setting really changes. <code>-NoTcp</code> skips it.</p></div>
+      <div class="nrow" data-r><h3>Chimney, NetDMA, DCA</h3><p>Obsolete, and they give errors on Windows 11. Not included.</p></div>
       <div class="nrow" data-r><h3>"DNS lowers your ping"</h3><p>DNS only turns names into IPs before you connect. Faster logins and stores, yes. In-game ping, no.</p></div>
       <div class="nrow" data-r><h3>Touching VPNs or Bluetooth</h3><p>Virtual adapters, VPNs and Bluetooth are ignored, so nothing else on your PC breaks.</p></div>
     </div>
@@ -376,15 +474,15 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
 <section class="sec" id="how">
   <div class="wrap">
     <div class="sh" data-r>
-      <p class="lbl">04 · How it works</p>
+      <p class="lbl">06 · How it works</p>
       <h2>Measure. Fix. <em class="s">Prove it.</em></h2>
     </div>
     <div class="steps" id="steps">
       <div class="track" aria-hidden="true"><i></i></div>
-      <div class="step" data-r style="--i:0"><span class="n">01</span><h3>Measure</h3><p>50 pings to your router, DNS and the closest Epic, Valve, Blizzard, Ubisoft, Xbox and Embark servers: average, jitter, spikes and loss.</p></div>
-      <div class="step" data-r style="--i:1"><span class="n">02</span><h3>Back up</h3><p>The current value of every option it may touch is saved, including your old DNS for IPv4 and IPv6.</p></div>
-      <div class="step" data-r style="--i:2"><span class="n">03</span><h3>Apply</h3><p>Only the eight settings, read back afterwards. A ✓ means it really changed.</p></div>
-      <div class="step" data-r style="--i:3"><span class="n">04</span><h3>Measure again</h3><p>Same servers, fair comparison: ▼ when it improved, ▲ when it got worse.</p></div>
+      <div class="step" data-r style="--i:0"><span class="n">01</span><h3>Measure</h3><p>50 pings to your router, DNS and the closest Epic, Valve, Blizzard, Ubisoft, Xbox and Embark servers: average, jitter, spikes and loss. Then the DNS and MTU tests.</p></div>
+      <div class="step" data-r style="--i:1"><span class="n">02</span><h3>Back up</h3><p>The current value of every option it may touch is saved, including your old DNS for IPv4 and IPv6, and values that didn't exist yet.</p></div>
+      <div class="step" data-r style="--i:2"><span class="n">03</span><h3>Apply</h3><p>Every change is read back: ✓ when it stuck, ✗ when it didn't, <b>!</b> when your Windows keeps it read-only.</p></div>
+      <div class="step" data-r style="--i:3"><span class="n">04</span><h3>Measure again</h3><p>Same servers, fair comparison: ▼ when it improved, ▲ when it got worse. Restart with <code>y</code> and it measures again after you log in, registry included.</p></div>
     </div>
   </div>
 </section>
@@ -392,7 +490,7 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
 <section class="sec" style="padding-top:0">
   <div class="wrap">
     <div class="sh" data-r>
-      <p class="lbl">05 · The real thing</p>
+      <p class="lbl">07 · The real thing</p>
       <h2>Straight from the <em class="s">console.</em></h2>
     </div>
     <div class="shots">
@@ -405,24 +503,26 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
 <section class="sec" id="usage" style="padding-top:0">
   <div class="wrap">
     <div class="sh" data-r>
-      <p class="lbl">06 · Usage</p>
+      <p class="lbl">08 · Usage</p>
       <h2>One script. Four <em class="s">commands.</em></h2>
     </div>
     <div class="usage">
       <div class="notes">
-        <p class="note" data-r style="--i:0"><b>Blue PowerShell, as admin</b>Open Windows PowerShell 5.1 as administrator in the folder where you saved <code>NetTune.ps1</code>.</p>
-        <p class="note" data-r style="--i:1"><b>Restart after Apply</b>"Allow the computer to turn off this device" only changes after a reboot. NetTune tells you at the end.</p>
-        <p class="note" data-r style="--i:2"><b>Expect a short drop</b>The connection goes away for a few seconds while the adapters restart.</p>
+        <p class="note" data-r style="--i:0"><b>Blue PowerShell, as admin</b>Open Windows PowerShell 5.1 as administrator in the folder where you saved <code>NetTune.ps1</code>. Test mode and the <code>-WhatIf</code> dry run also work without admin.</p>
+        <p class="note" data-r style="--i:1"><b>Restart after Apply</b>The registry values (Nagle, MMCSS, Tcpip, ServiceProvider) and "Allow the computer to turn off this device" only take effect after a restart. Answer <code>y</code> to "Restart now?" and NetTune carries on by itself after you log in.</p>
+        <p class="note" data-r style="--i:2"><b>DNS on Wi-Fi is per network</b>Windows keeps Wi-Fi DNS for each network, so Revert restores the DNS of the network you're connected to when you run it. Ethernet isn't affected.</p>
+        <p class="note" data-r style="--i:3"><b>Expect a short drop</b>The adapters restart once, all together, so the connection goes away for a few seconds.</p>
       </div>
       <div data-r style="--i:1">
         <div class="terminal glass">
           <div class="tbar"><i></i><i></i><i></i><span>Windows PowerShell · Administrator</span></div>
           <div class="cmd"><div><div class="c"># 1 · Measure only. Changes nothing, no admin needed</div><pre><b>PS&gt;</b> powershell -ExecutionPolicy Bypass -File .\NetTune.ps1</pre></div><button class="copy" data-copy="powershell -ExecutionPolicy Bypass -File .\NetTune.ps1" aria-label="Copy command 1"></button></div>
-          <div class="cmd"><div><div class="c"># 2 · Dry run. Shows what would change</div><pre><b>PS&gt;</b> powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -WhatIf</pre></div><button class="copy" data-copy="powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -WhatIf" aria-label="Copy command 2"></button></div>
-          <div class="cmd"><div><div class="c"># 3 · Apply. Measure, back up, apply, measure again</div><pre><b>PS&gt;</b> powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply</pre></div><button class="copy" data-copy="powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply" aria-label="Copy command 3"></button></div>
+          <div class="cmd"><div><div class="c"># 2 · Dry run. Shows what would change (no admin needed)</div><pre><b>PS&gt;</b> powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -WhatIf</pre></div><button class="copy" data-copy="powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply -WhatIf" aria-label="Copy command 2"></button></div>
+          <div class="cmd"><div><div class="c"># 3 · Apply, as admin. Measure, back up, apply, measure again</div><pre><b>PS&gt;</b> powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply</pre></div><button class="copy" data-copy="powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Apply" aria-label="Copy command 3"></button></div>
           <div class="cmd"><div><div class="c"># 4 · Undo everything, from the latest backup</div><pre><b>PS&gt;</b> powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Revert</pre></div><button class="copy" data-copy="powershell -ExecutionPolicy Bypass -File .\NetTune.ps1 -Mode Revert" aria-label="Copy command 4"></button></div>
         </div>
-        <p class="more">More: <code>-Dns Keep</code> <code>-Services Epic,Valve</code> <code>-ExtraTargets 1.2.3.4</code> <code>-Count 100</code> · Full help: <code>Get-Help .\NetTune.ps1 -Full</code></p>
+        <p class="more">New in 1.7.0: <code>-NoTcp</code> skips the TCP Optimizer set · <code>-NoMtu</code> skips the MTU test</p>
+        <p class="more">More: <code>-Dns Keep</code> <code>-Services Epic,Valve</code> <code>-ExtraTargets 1.2.3.4</code> <code>-Count 100</code> <code>-SkipTest</code> · Full help: <code>Get-Help .\NetTune.ps1 -Full</code></p>
       </div>
     </div>
   </div>
@@ -439,13 +539,15 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
 <section class="sec" id="faq">
   <div class="wrap">
     <div class="sh" data-r>
-      <p class="lbl">07 · FAQ</p>
+      <p class="lbl">09 · FAQ</p>
       <h2>Questions, <em class="s">answered.</em></h2>
     </div>
     <div class="faq" data-r>
       <details><summary>Is it safe to run?<i aria-hidden="true"></i></summary><p>Yes. Run the measure-only mode or <code>-WhatIf</code> first to see exactly what would change. Apply saves a backup of every original value before touching anything, and <code>-Mode Revert</code> restores it.</p></details>
       <details><summary>Will it lower my ping to the game server?<i aria-hidden="true"></i></summary><p>It removes the spikes and lag that come from your own PC and Wi-Fi. It can't shorten the distance to the server or fix your ISP. The golden rule: if the ping to your router is high or spiky, the problem is local, and that's exactly what NetTune fixes.</p></details>
-      <details><summary>Why didn't the "after" test show the power-management change?<i aria-hidden="true"></i></summary><p>"Allow the computer to turn off this device" only takes effect after a restart, so the after test can't include it yet. Restart the PC after Apply.</p></details>
+      <details><summary>Why doesn't the "after" test show everything?<i aria-hidden="true"></i></summary><p>The registry values (Nagle, MMCSS, Tcpip, ServiceProvider) and "Allow the computer to turn off this device" only take effect after a restart, so the after test can't include them yet. Answer <code>y</code> to "Restart now?" at the end of Apply: NetTune runs the test once more after you log in, with a Before vs After that includes them.</p></details>
+      <details><summary>Do the TCP tweaks lower my in-game ping?<i aria-hidden="true"></i></summary><p>Mostly no: games use UDP. The table above files each one under what it really changes: small or indirect, TCP only (downloads, sites, launchers) or no real effect. They're included for parity with TCP Optimizer, and <code>-NoTcp</code> skips them all.</p></details>
+      <details><summary>I switch between Wi-Fi networks. Anything to know?<i aria-hidden="true"></i></summary><p>The Nagle values are kept on every network by a small scheduled task. The DNS on Wi-Fi is per network, so Revert only restores it on the network you're connected to. And the MTU depends on the network too: run NetTune again when you change networks.</p></details>
       <details><summary>The spikes came back after a driver update. Why?<i aria-hidden="true"></i></summary><p>Driver updates (Windows Update, Lenovo Vantage and similar) can restore factory values. Just run <code>-Mode Apply</code> again.</p></details>
       <details><summary>I get an execution policy error.<i aria-hidden="true"></i></summary><p>Always launch it with <code>powershell -ExecutionPolicy Bypass -File ...</code> as in the examples. It's built for Windows PowerShell 5.1 and also runs on PowerShell 7.</p></details>
     </div>
@@ -457,8 +559,9 @@ footer{position:relative;margin-top:clamp(96px,12vw,160px);overflow:hidden}
     <p class="lbl" data-r style="margin-bottom:28px"><span class="dot"></span>About two minutes, free</p>
     <h2 data-r>Stop guessing.<br><em class="s">Measure.</em></h2>
     <div class="ctas" data-r style="--i:1">
-      <a class="btn" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">Download NetTune.ps1<span class="chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v14M6 12l6 6 6-6"/></svg></span></a>
+      <a class="btn" href="https://github.com/dmparede/NetTune/releases/latest/download/NetTune.ps1">Download NetTune 1.7.0<span class="chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v14M6 12l6 6 6-6"/></svg></span></a>
       <a class="link" href="https://github.com/dmparede/NetTune#readme">Read the docs <span aria-hidden="true">↗</span></a>
+      <a class="link" href="https://github.com/dmparede/NetTune/releases/tag/v1.7.0">Release notes <span aria-hidden="true">↗</span></a>
     </div>
   </div>
 </section>
