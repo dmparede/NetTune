@@ -93,6 +93,26 @@ Both are in the backup. Revert removes the task and deletes the values, includin
 
 ## How to use
 
+### The easy way: double-click NetTune.cmd
+
+1. Download `NetTune.zip` from the [latest release](https://github.com/dmparede/NetTune/releases/latest) and extract it, or download **both** `NetTune.cmd` and `NetTune.ps1` and save them **in the same folder** (any folder works, spaces and accents included).
+2. Double-click **`NetTune.cmd`**. It asks for administrator rights (the Windows UAC prompt) and opens a menu:
+
+```text
+  1  Test            measure only, changes nothing
+  2  Apply -WhatIf   dry run: shows what would change
+  3  Apply           back up, apply the tweaks, measure again
+  4  Revert          undo everything from the latest backup
+  5  Advanced        Apply with -NoTcp / -NoMtu / -Dns Keep
+  0  Exit
+```
+
+After each run it goes back to the menu. **5** asks about `-NoTcp`, `-NoMtu` and `-Dns Keep` one by one, then lets you pick the dry run or the real Apply. If you say no to the UAC prompt, the menu still opens: Test and the dry run work without admin, and Apply or Revert offer to open it again as administrator.
+
+`NetTune.cmd` is only a launcher (open it in Notepad to check): it runs `powershell.exe -NoProfile -ExecutionPolicy Bypass -File NetTune.ps1 -Mode ...`, so everything below applies to it too, including the restart and the test after the restart. It switches the console to UTF-8 for NetTune's symbols and falls back to `-Ascii` when the console can't take it (`NetTune.cmd /ascii` forces it). Windows may warn that the file came from the internet before running it.
+
+### From PowerShell
+
 Open **PowerShell as administrator** (the blue one, Windows PowerShell 5.1) in the script's folder.
 
 ```powershell
@@ -137,7 +157,7 @@ During Apply, the connection drops for a few seconds while the adapters restart.
 If you answer **y** to `Restart now?`, Apply first:
 
 1. saves `logs\pending-after-restart.json` with the "before" test results, the servers it used, the backup file, the date and time, and the network: adapter, network profile name (`Get-NetConnectionProfile`) and gateway IP;
-2. registers a **one-time** scheduled task, `\NetTune\NetTune after restart`: at **your** next logon, highest rights (no UAC prompt), interactive (the window shows up), also on battery. It runs `powershell.exe -NoExit -ExecutionPolicy Bypass -File "...\NetTune.ps1" -Mode Test -AfterRestart` from the script's folder;
+2. registers a **one-time** scheduled task, `\NetTune\NetTune after restart`: at **your** next logon, highest rights (no UAC prompt), interactive (the window shows up), also on battery. It runs `powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File "...\NetTune.ps1" -Mode Test -AfterRestart` from the script's folder;
 3. restarts.
 
 When you log in, NetTune opens by itself and:
@@ -253,10 +273,15 @@ Both folders are in `.gitignore`, because they are specific to each PC.
 ## Notes
 
 - An adapter driver update (Windows Update or Lenovo Vantage, for example) can restore the factory values. If the spikes come back, run `-Mode Apply` again.
-- If you get an execution policy error, always use `powershell -ExecutionPolicy Bypass -File ...` as in the examples.
+- If you get an execution policy error, double-click `NetTune.cmd`, or use `powershell -ExecutionPolicy Bypass -File ...` as in the examples.
 - Built for PowerShell 5.1 (the one that ships with Windows). It also runs on PowerShell 7.
 
 ## Changelog
+
+### 1.7.1
+
+- **`NetTune.cmd`: double-click to run.** Asks for administrator rights (UAC) and shows a menu: Test, dry run, Apply, Revert, and Apply with `-NoTcp` / `-NoMtu` / `-Dns Keep`. It goes back to the menu after each run, clears the screen before each run, works from folders with spaces and accents, and falls back to `-Ascii` when the console can't show NetTune's symbols. It only calls `NetTune.ps1`, so the restart and the test after the restart work as before. The release now has both files, also as `NetTune.zip`.
+- **The test after the restart starts with `-NoProfile`**, so your PowerShell profile no longer loads in that window.
 
 ### 1.7.0
 

@@ -132,7 +132,7 @@ $WhatIfPreference = $false
 Import-Module NetAdapter, NetTCPIP, DnsClient -ErrorAction SilentlyContinue
 $WhatIfPreference = $savedWhatIf
 
-$Version   = '1.7.0'
+$Version   = '1.7.1'
 $Root      = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $BackupDir = Join-Path $Root 'backups'
 $LogDir    = Join-Path $Root 'logs'
@@ -1993,7 +1993,7 @@ function Register-AfterRestartTask {
     # One-time task at the next logon of this user: highest rights (no UAC prompt), interactive
     # (the window shows up), also on battery. PowerShell stays open (-NoExit), so no time limit.
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $arg = "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Mode Test -AfterRestart"
+    $arg = "-NoProfile -NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Mode Test -AfterRestart"
     if ($Ascii) { $arg += ' -Ascii' }
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $Root
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
